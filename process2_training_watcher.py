@@ -16,6 +16,7 @@ import json
 import chess
 import chess.pgn
 import io
+import torch
 from flask import Flask, request, jsonify, render_template
 from threading import Thread
 import sys
@@ -212,24 +213,43 @@ class ContinuousTrainer:
         self.save_state()
         
         try:
-            # Simple training (placeholder - will use actual PyTorch training)
-            epochs = min(5 + self.state['models_trained'], 20)
+            # Check for GPU
+            GPU_AVAILABLE = torch.backends.mps.is_available()
+            device = "mps" if GPU_AVAILABLE else "cpu"
+            BATCH_SIZE = 256 if GPU_AVAILABLE else 64
             
-            logger.info(f"🔥 Training for {epochs} epochs...")
+            logger.info(f"🔥 GPU: {'MPS (Metal)' if GPU_AVAILABLE else 'CPU'}")
+            logger.info(f"📦 Batch size: {BATCH_SIZE}")
             
-            # Simulate training (replace with actual training)
-            time.sleep(5)
+            # Increase epochs as we get more data
+            epochs = min(10 + (self.state['models_trained'] * 2), 30)
             
-            self.state['models_trained'] += 1
-            self.state['last_training_time'] = time.time()
-            self.model_version = self.state['models_trained']
+            cmd = [
+                "python3", "neural_network/src/train.py",
+                "--data", str(self.positions_dataset),
+                "--epochs", str(epochs),
+                "--batch-size", str(BATCH_SIZE),
+                "--device", device,
+                "--num-workers", "8"
+            ]
             
-            logger.info(f"✅ Training complete! Model v{self.model_version}")
+            logger.info(f"🚀 Executing: {' '.join(cmd)}")
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+            
+            if result.returncode == 0:
+                logger.info(f"✅ Training complete!")
+                self.state['models_trained'] += 1
+                self.state['last_training_time'] = time.time()
+                self.model_version = self.state['models_trained']
+                self.save_state()
+            else:
+                logger.error(f"❌ Training failed: {result.stderr[:500]}")
             
             self.state['training_active'] = False
             self.save_state()
             
-            return True
+            return result.returncode == 0
         
         except Exception as e:
             logger.error(f"❌ Training failed: {e}")
