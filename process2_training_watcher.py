@@ -155,7 +155,7 @@ class ContinuousTrainer:
                 outcome = 0.5
             
             board = game.board()
-            move_number = 0
+            move_number = 1  # Start from move 1
             
             for move in game.mainline_moves():
                 fen = board.fen()
@@ -472,7 +472,10 @@ class ContinuousTrainer:
                         score = -score
                         
                     # Add chaos bonus (Anti-Stockfish prefers chaos!)
-                    score += (chaos.item() * 0.1)
+                    # Reduce chaos in opening (first 10 moves) to avoid suicidal openings like Nh3/Ng5
+                    move_count = board.fullmove_number
+                    chaos_weight = 0.02 if move_count <= 10 else 0.1
+                    score += (chaos.item() * chaos_weight)
                     
                     # REPETITION PENALTY
                     # If position has occurred 2+ times, apply massive penalty to avoid 3-fold repetition
