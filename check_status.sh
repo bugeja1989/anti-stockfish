@@ -25,9 +25,19 @@ sysctl vm.swapusage
 # 3. PYTHON RESOURCE USAGE
 echo ""
 echo "💻 PYTHON PROCESS DETAILS:"
-ps -eo pid,pcpu,pmem,rss,comm | grep "python" | grep -v grep | awk '
-BEGIN {printf "%-8s %-8s %-8s %-10s %s\n", "PID", "CPU%", "MEM%", "RSS(MB)", "COMMAND"}
-{printf "%-8s %-8s %-8s %-10.2f %s\n", $1, $2, $3, $4/1024, $5}'
+# Construct list of PIDs to check, removing empty ones
+PIDS_TO_CHECK=""
+[ -n "$P1_PID" ] && PIDS_TO_CHECK="$P1_PID"
+[ -n "$P2_PID" ] && PIDS_TO_CHECK="${PIDS_TO_CHECK:+$PIDS_TO_CHECK,}$P2_PID"
+[ -n "$TRAIN_PID" ] && PIDS_TO_CHECK="${PIDS_TO_CHECK:+$PIDS_TO_CHECK,}$TRAIN_PID"
+
+if [ -n "$PIDS_TO_CHECK" ]; then
+    ps -p "$PIDS_TO_CHECK" -o pid,pcpu,pmem,rss,command | awk '
+    BEGIN {printf "%-8s %-8s %-8s %-10s %s\n", "PID", "CPU%", "MEM%", "RSS(MB)", "COMMAND"}
+    NR>1 {printf "%-8s %-8s %-8s %-10.2f %s\n", $1, $2, $3, $4/1024, $5}'
+else
+    echo "⚠️  No active Anti-Stockfish processes found to analyze."
+fi
 
 # 4. DEEP HARDWARE STATS (Requires Sudo)
 echo ""
@@ -40,16 +50,35 @@ if [ "$EUID" -ne 0 ]; then
     top -l 1 | grep -E "^CPU|^PhysMem"
 else
     echo "Gathering 5 seconds of telemetry..."
-    # Capture CPU, GPU, ANE, and Thermal stats
-    powermetrics --samplers cpu_power,gpu_power,thermal -n 1 -i 5000 --format plist > /tmp/anti_stockfish_metrics.xml
     
-    # Parse key metrics (using grep for simplicity as plist parsing in bash is verbose)
+    # Run powermetrics once and save to temp file to avoid running it multiple times
+    # We use a broader set of samplers to ensure we catch everything
+    powermetrics --samplers cpu_power,gpu_power,thermal -n 1 -i 5000 > /tmp/as_metrics.txt 2>/dev/null
+    
     echo "--- POWER & FREQUENCY ---"
-    powermetrics --samplers cpu_power,gpu_power -n 1 -i 1000 | grep -E "CPU Power|GPU Power|Package Power|ANE Power|GPU Active|GPU Idle"
+    # Grep for specific power metrics. Adjusting for potential output variations.
+    grep -E "CPU Power|GPU Power|ANE Power|Package Power" /tmp/as_metrics.txt || echo "Power metrics not found."
     
     echo ""
+    echo "--- GPU UTILIZATION ---"
+    grep -E "GPU Active|GPU Idle" /tmp/as_metrics.txt || echo "GPU utilization not found."
+
+    echo ""
     echo "--- THERMALS ---"
-    powermetrics --samplers thermal -n 1 -i 1000 | grep -E "Fan|Temperature"
+    # Grep for Fan speed and Temperature. 
+    # M-series usually reports "Fan: x RPM" and "die temperature"
+    grep -iE "Fan|temp" /tmp/as_metrics.txt | grep -v "sensor" | head -n 10 || echo "Thermal metrics not found."
+    
+    echo ""
+    echo "--- ANE (NEURAL ENGINE) STATUS ---"
+    # Specifically check for ANE power to answer user's question
+    ANE_POWER=$(grep "ANE Power" /tmp/as_metrics.txt)
+    if [ -z "$ANE_POWER" ]; then
+        echo "ANE Power: 0 mW (Idle or not reported)"
+    else
+        echo "$ANE_POWER"
+        echo "ℹ️  Note: PyTorch MPS uses the GPU. ANE is mostly for CoreML."
+    fi
 fi
 
 echo ""
