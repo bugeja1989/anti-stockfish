@@ -230,7 +230,8 @@ class ContinuousTrainer:
             # Check for GPU
             GPU_AVAILABLE = torch.backends.mps.is_available()
             device = "mps" if GPU_AVAILABLE else "cpu"
-            BATCH_SIZE = 256 if GPU_AVAILABLE else 64
+            # Use larger batch size for M4 Pro to maximize throughput
+            BATCH_SIZE = 1024 if GPU_AVAILABLE else 64
             
             logger.info(f"🔥 GPU: {'MPS (Metal)' if GPU_AVAILABLE else 'CPU'}")
             logger.info(f"📦 Batch size: {BATCH_SIZE}")
