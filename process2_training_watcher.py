@@ -159,7 +159,7 @@ class ContinuousTrainer:
             return 0
         
         # Limit batch size to allow training to happen more often
-        BATCH_LIMIT = 50
+        BATCH_LIMIT = 10
         entries_to_process = min(new_entries, BATCH_LIMIT)
         
         logger.info(f"📊 Processing {entries_to_process} new entries (Batch limit: {BATCH_LIMIT})...")
