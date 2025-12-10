@@ -342,12 +342,16 @@ class ContinuousTrainer:
             # Limit ELO (Stockfish supports UCI_LimitStrength and UCI_Elo)
             with chess.engine.SimpleEngine.popen_uci(self.stockfish_path) as engine:
                 # Configure ELO
-                engine.configure({"UCI_LimitStrength": True, "UCI_Elo": elo})
+                if elo < 500:
+                    # For very low ELO, we also limit nodes to ensure it plays badly
+                    engine.configure({"UCI_LimitStrength": True, "UCI_Elo": elo})
+                    result = engine.play(board, chess.engine.Limit(nodes=100)) # Limit nodes for stupidity
+                else:
+                    engine.configure({"UCI_LimitStrength": True, "UCI_Elo": elo})
+                    # Time limit based on ELO (give it a bit more time for higher ELOs)
+                    time_limit = 0.1 if elo < 1500 else 0.5 if elo < 2500 else 1.0
+                    result = engine.play(board, chess.engine.Limit(time=time_limit))
                 
-                # Time limit based on ELO (give it a bit more time for higher ELOs)
-                time_limit = 0.1 if elo < 1500 else 0.5 if elo < 2500 else 1.0
-                
-                result = engine.play(board, chess.engine.Limit(time=time_limit))
                 return {'best_move': result.move.uci(), 'elo': elo}
                 
         except Exception as e:
@@ -372,6 +376,8 @@ class ContinuousTrainer:
                         for move in game.mainline_moves():
                             temp_board.push(move)
                             history_fens.append(temp_board.fen().split(' ')[0])
+                        # Ensure we are at the current position
+                        board = temp_board
                 except Exception as e:
                     logger.warning(f"Failed to parse PGN for repetition check: {e}")
             
@@ -471,10 +477,10 @@ class ContinuousTrainer:
                     # REPETITION PENALTY
                     # If position has occurred 2+ times, apply massive penalty to avoid 3-fold repetition
                     if repetition_count >= 2:
-                        score -= 10.0 # Massive penalty
+                        score -= 100.0 # Massive penalty (Draw)
                         logger.info(f"🚫 Avoiding repetition: {move.uci()} (Count: {repetition_count})")
                     elif repetition_count == 1:
-                        score -= 0.5 # Slight penalty for 2nd occurrence
+                        score -= 2.0 # Strong penalty for 2nd occurrence to break loops early
                 
                 if score > best_eval:
                     best_eval = score
