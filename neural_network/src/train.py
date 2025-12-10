@@ -78,6 +78,14 @@ class StreamingChessDataset(IterableDataset):
         except:
             return None
 
+def collate_fn(batch):
+    """Custom collate function to filter out None values."""
+    # Filter out None values from process_line failures
+    batch = [item for item in batch if item is not None]
+    if not batch:
+        return None
+    return torch.utils.data.dataloader.default_collate(batch)
+
 def train_epoch(chaos_model, sacrifice_model, dataloader, optimizer_chaos, optimizer_sac, device, total_batches):
     """Train for one epoch."""
     chaos_model.train()
@@ -173,13 +181,6 @@ def main():
     total_batches = total_lines // args.batch_size
     logger.info(f"📊 Total positions: {total_lines:,}")
     logger.info(f"📦 Total batches per epoch: {total_batches:,}")
-
-    def collate_fn(batch):
-        # Filter out None values from process_line failures
-        batch = [item for item in batch if item is not None]
-        if not batch:
-            return None
-        return torch.utils.data.dataloader.default_collate(batch)
 
     dataloader = DataLoader(
         dataset,
