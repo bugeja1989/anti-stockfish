@@ -4,9 +4,12 @@
 Anti-Stockfish Process 1: Ultimate Chess.com Collector
 GOAL: 100,000,000+ games and positions
 Strategy:
-1. Prioritize Super GMs (Classical/Rapid)
-2. Collect from ALL top charts (Top 100)
-3. Filter for high-quality games (Classical/Rapid/Blitz)
+1. Fetch ALL GMs (Grandmasters)
+2. Sort them by Rapid Rating (Highest to Lowest)
+3. Take Top 1000 from this sorted list
+4. Top 100: Sync ALL new games
+5. Top 101-1000: Dig 1000 games deeper into history per run
+6. Loop forever
 """
 
 import requests
@@ -15,7 +18,7 @@ import logging
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import List, Set
+from typing import List, Dict, Optional
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,8 +31,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class MegaChessComCollector:
-    """Aggressive collector targeting 100M+ positions"""
-    
     def __init__(self):
         self.data_dir = Path("neural_network/data")
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -37,11 +38,8 @@ class MegaChessComCollector:
         self.dataset_file = self.data_dir / "chesscom_master_dataset.jsonl"
         self.state_file = Path("process1_state.json")
         
-        # Rate limiting
-        self.REQUEST_DELAY = 0.3  # 300ms between requests
+        self.REQUEST_DELAY = 0.25
         self.last_request_time = 0
-        
-        # Chess.com requires a User-Agent with contact info
         self.headers = {
             'User-Agent': 'Anti-Stockfish-Collector/1.0 (contact: anti-stockfish@example.com)'
         }
@@ -49,51 +47,46 @@ class MegaChessComCollector:
         self.load_state()
     
     def load_state(self):
-        """Load collection state"""
         if self.state_file.exists():
-            with open(self.state_file) as f:
-                data = json.load(f)
-                self.state = {
-                    'total_games': data.get('total_games', 0),
-                    'total_positions': data.get('total_positions', 0),
-                    'players_processed': set(data.get('players_processed', [])),
-                    'collection_rounds': data.get('collection_rounds', 0),
-                    'last_update': data.get('last_update')
-                }
-            logger.info(f"📊 Loaded: {self.state['total_games']:,} games, {self.state['total_positions']:,} positions, {len(self.state['players_processed']):,} players")
+            try:
+                with open(self.state_file) as f:
+                    data = json.load(f)
+                    self.state = {
+                        'total_games': data.get('total_games', 0),
+                        'total_positions': data.get('total_positions', 0),
+                        'collection_rounds': data.get('collection_rounds', 0),
+                        'top_100_last_sync': data.get('top_100_last_sync', {}),
+                        'dig_state': data.get('dig_state', {})
+                    }
+                logger.info(f"📊 Loaded State: {self.state['total_games']:,} games collected")
+            except Exception as e:
+                logger.error(f"❌ Error loading state: {e}")
+                self.reset_state()
         else:
-            self.state = {
-                'total_games': 0,
-                'total_positions': 0,
-                'players_processed': set(),
-                'collection_rounds': 0,
-                'last_update': None
-            }
-            logger.info("🆕 Starting fresh collection")
-    
-    def save_state(self):
-        """Save collection state"""
-        data = {
-            'total_games': self.state['total_games'],
-            'total_positions': self.state['total_positions'],
-            'players_processed': list(self.state['players_processed']),
-            'collection_rounds': self.state['collection_rounds'],
-            'last_update': datetime.now().isoformat()
+            self.reset_state()
+            
+    def reset_state(self):
+        self.state = {
+            'total_games': 0,
+            'total_positions': 0,
+            'collection_rounds': 0,
+            'top_100_last_sync': {},
+            'dig_state': {}
         }
+        logger.info("🆕 Starting fresh collection state")
+
+    def save_state(self):
         with open(self.state_file, 'w') as f:
-            json.dump(data, f, indent=2)
+            json.dump(self.state, f, indent=2)
     
     def rate_limit(self):
-        """Enforce rate limiting"""
         elapsed = time.time() - self.last_request_time
         if elapsed < self.REQUEST_DELAY:
             time.sleep(self.REQUEST_DELAY - elapsed)
         self.last_request_time = time.time()
     
     def make_request(self, url: str, retries: int = 3):
-        """Make HTTP request with retries"""
         self.rate_limit()
-        
         for attempt in range(retries):
             try:
                 response = requests.get(url, headers=self.headers, timeout=15)
@@ -108,226 +101,202 @@ class MegaChessComCollector:
                     return None
             except Exception as e:
                 logger.error(f"❌ Request error: {e}")
-                if attempt < retries - 1:
-                    time.sleep(2 ** attempt)
+                time.sleep(2 ** attempt)
         return None
-    
-    def get_leaderboard_players(self, category: str, top_n: int = 100) -> List[str]:
-        """Get top players from leaderboard"""
-        data = self.make_request("https://api.chess.com/pub/leaderboards")
-        if not data or category not in data:
+
+    def get_player_stats(self, username: str) -> dict:
+        """Get player stats including ratings"""
+        return self.make_request(f"https://api.chess.com/pub/player/{username}/stats")
+
+    def get_sorted_gms(self) -> List[str]:
+        """Get ALL GMs, fetch their Rapid ratings, and sort them"""
+        logger.info("📥 Fetching list of all GMs...")
+        data = self.make_request("https://api.chess.com/pub/titled/GM")
+        if not data or 'players' not in data:
             return []
         
-        players = []
-        for player in data[category][:top_n]:
-            username = player.get('username')
-            if username:
-                players.append(username.lower())
+        all_gms = data['players']
+        logger.info(f"📋 Found {len(all_gms)} GMs. Fetching ratings to sort...")
         
-        return players
-    
-    def get_titled_players(self, title: str) -> List[str]:
-        """Get all players with a specific title (GM, IM, etc.)"""
-        data = self.make_request(f"https://api.chess.com/pub/titled/{title}")
-        return data.get('players', []) if data else []
+        gm_ratings = []
+        
+        # We need to fetch stats for EACH GM to get their live rapid rating.
+        # This is heavy, so we'll do it in batches or just accept the initial cost.
+        # To speed it up, we can try to use the leaderboard API first for the very top,
+        # but the user wants "Top 1000". Leaderboard usually gives top 50.
+        # So we MUST fetch stats for GMs.
+        
+        # Optimization: Check if we have a cached sorted list? No, ratings change.
+        # We will fetch stats for the first 2000 GMs (all of them basically).
+        
+        count = 0
+        for username in all_gms:
+            stats = self.get_player_stats(username)
+            rating = 0
+            if stats and 'chess_rapid' in stats:
+                rating = stats['chess_rapid'].get('last', {}).get('rating', 0)
+            
+            gm_ratings.append({'username': username, 'rating': rating})
+            count += 1
+            if count % 100 == 0:
+                logger.info(f"  ...fetched ratings for {count}/{len(all_gms)} GMs")
+                
+        # Sort by rating descending
+        gm_ratings.sort(key=lambda x: x['rating'], reverse=True)
+        
+        # Log top 10 for verification
+        logger.info("🏆 Top 10 GMs by Rapid Rating:")
+        for i, p in enumerate(gm_ratings[:10]):
+            logger.info(f"  #{i+1} {p['username']} ({p['rating']})")
+            
+        return [p['username'] for p in gm_ratings]
 
-    def get_player_archives(self, username: str) -> List[str]:
-        """Get monthly archives for player"""
+    def get_archives(self, username: str) -> List[str]:
         data = self.make_request(f"https://api.chess.com/pub/player/{username}/games/archives")
         return data.get('archives', []) if data else []
-    
-    def get_archive_games(self, archive_url: str) -> List[dict]:
-        """Get games from archive"""
-        data = self.make_request(archive_url)
+
+    def get_games(self, url: str) -> List[dict]:
+        data = self.make_request(url)
         return data.get('games', []) if data else []
-    
+
     def estimate_positions(self, game: dict) -> int:
-        """Estimate positions in game"""
-        pgn = game.get('pgn', '')
-        moves = pgn.count('. ')
-        return max(moves, 1)
-    
-    def collect_player(self, username: str) -> tuple:
-        """Collect all games from player"""
-        archives = self.get_player_archives(username)
+        return max(game.get('pgn', '').count('. '), 1)
+
+    def filter_game(self, game: dict) -> bool:
+        """Strict filter for high quality games"""
+        return (
+            game.get('rules') == 'chess' and 
+            game.get('time_class') in ['rapid', 'classical', 'blitz', 'daily']
+        )
+
+    def sync_top_player(self, username: str):
+        """Top 100 Strategy: Get ALL new games since last sync"""
+        last_sync = self.state['top_100_last_sync'].get(username, 0)
+        archives = self.get_archives(username)
+        
+        if last_sync == 0:
+            target_archives = archives 
+        else:
+            target_archives = archives[-3:] 
+            
+        new_games_count = 0
+        new_positions_count = 0
+        max_timestamp = last_sync
+        
+        for url in target_archives:
+            games = self.get_games(url)
+            for game in games:
+                if not self.filter_game(game):
+                    continue
+                    
+                end_time = game.get('end_time', 0)
+                if end_time > last_sync:
+                    self.save_game(username, url, game)
+                    new_games_count += 1
+                    new_positions_count += self.estimate_positions(game)
+                    max_timestamp = max(max_timestamp, end_time)
+        
+        self.state['top_100_last_sync'][username] = max_timestamp
+        return new_games_count, new_positions_count
+
+    def dig_deep_player(self, username: str, limit: int = 1000):
+        """101-1000 Strategy: Dig deeper into history (chunk of 1000)"""
+        archives = self.get_archives(username)
         if not archives:
             return 0, 0
-        
-        total_games = 0
-        total_positions = 0
-        
-        # Get last 24 months (2 years) for high quality games
-        for archive_url in reversed(archives[-24:]):
-            games = self.get_archive_games(archive_url)
             
-            if games:
-                # Filter for Classical/Rapid/Blitz (exclude Bullet/Hyperbullet if possible, but we take all for volume)
-                # Prioritize standard chess
-                filtered_games = [
-                    g for g in games 
-                    if g.get('rules') == 'chess' and g.get('time_class') in ['rapid', 'classical', 'blitz', 'daily']
-                ]
+        archives = list(reversed(archives))
+        
+        dig_state = self.state['dig_state'].get(username, {'archive_idx': 0, 'game_offset': 0})
+        current_idx = dig_state['archive_idx']
+        current_offset = dig_state['game_offset']
+        
+        collected_count = 0
+        collected_positions = 0
+        
+        while collected_count < limit and current_idx < len(archives):
+            url = archives[current_idx]
+            games = self.get_games(url)
+            games = list(reversed(games))
+            
+            if current_offset < len(games):
+                games_to_process = games[current_offset:]
                 
-                if not filtered_games:
-                    continue
+                for game in games_to_process:
+                    if collected_count >= limit:
+                        break
+                        
+                    if self.filter_game(game):
+                        self.save_game(username, url, game)
+                        collected_count += 1
+                        collected_positions += self.estimate_positions(game)
+                    
+                    current_offset += 1
+            
+            if current_offset >= len(games):
+                current_idx += 1
+                current_offset = 0
+        
+        self.state['dig_state'][username] = {
+            'archive_idx': current_idx,
+            'game_offset': current_offset
+        }
+        
+        return collected_count, collected_positions
 
-                # Save to dataset
-                entry = {
-                    'player': username,
-                    'archive': archive_url,
-                    'collected_at': datetime.now().isoformat(),
-                    'games': filtered_games
-                }
-                
-                with open(self.dataset_file, 'a') as f:
-                    f.write(json.dumps(entry) + '\n')
-                
-                # Count
-                for game in filtered_games:
-                    total_positions += self.estimate_positions(game)
-                total_games += len(filtered_games)
-        
-        return total_games, total_positions
-    
-    def collect_category(self, category: str, top_n: int = 100):
-        """Collect from category"""
-        logger.info(f"\n{'='*80}")
-        logger.info(f"🎯 CATEGORY: {category.upper()} (Top {top_n})")
-        logger.info(f"{'='*80}\n")
-        
-        players = self.get_leaderboard_players(category, top_n)
-        logger.info(f"📥 Found {len(players)} players")
-        
-        new_players = 0
-        category_games = 0
-        category_positions = 0
-        
-        for i, username in enumerate(players, 1):
-            # Skip if already processed
-            if username in self.state['players_processed']:
-                continue
+    def save_game(self, username, archive_url, game):
+        entry = {
+            'player': username,
+            'archive': archive_url,
+            'collected_at': datetime.now().isoformat(),
+            'games': [game]
+        }
+        with open(self.dataset_file, 'a') as f:
+            f.write(json.dumps(entry) + '\n')
             
-            logger.info(f"[{i}/{len(players)}] {username}...")
-            
-            games, positions = self.collect_player(username)
-            
-            if games > 0:
-                self.state['players_processed'].add(username)
-                self.state['total_games'] += games
-                self.state['total_positions'] += positions
-                category_games += games
-                category_positions += positions
-                new_players += 1
-                
-                logger.info(f"  ✅ {games} games, ~{positions:,} positions")
-                
-                # Save every 10 players
-                if new_players % 10 == 0:
-                    self.save_state()
-        
-        logger.info(f"\n✅ {category}: +{new_players} players, +{category_games:,} games, +{category_positions:,} positions")
-        logger.info(f"📊 TOTAL: {self.state['total_games']:,} games, {self.state['total_positions']:,} positions\n")
-        
-        self.save_state()
+        self.state['total_games'] += 1
+        self.state['total_positions'] += self.estimate_positions(game)
 
-    def collect_titled_players(self, title: str):
-        """Collect all players with a specific title"""
-        logger.info(f"\n{'='*80}")
-        logger.info(f"🏆 TITLE: {title} (All Players)")
-        logger.info(f"{'='*80}\n")
-        
-        players = self.get_titled_players(title)
-        logger.info(f"📥 Found {len(players)} {title}s")
-        
-        new_players = 0
-        
-        for i, username in enumerate(players, 1):
-            if username in self.state['players_processed']:
-                continue
-                
-            logger.info(f"[{i}/{len(players)}] {username} ({title})...")
-            games, positions = self.collect_player(username)
-            
-            if games > 0:
-                self.state['players_processed'].add(username)
-                self.state['total_games'] += games
-                self.state['total_positions'] += positions
-                new_players += 1
-                logger.info(f"  ✅ {games} games, ~{positions:,} positions")
-                
-                if new_players % 10 == 0:
-                    self.save_state()
-        
-        self.save_state()
-    
     def run_forever(self):
-        """Run continuous collection"""
-        logger.info(f"\n{'='*80}")
-        logger.info(f"🚀 MEGA CHESS.COM COLLECTOR")
-        logger.info(f"{'='*80}")
-        logger.info(f"🎯 GOAL: 100,000,000+ POSITIONS")
-        logger.info(f"📊 Current: {self.state['total_positions']:,} positions ({(self.state['total_positions']/100_000_000)*100:.3f}%)")
-        logger.info(f"{'='*80}\n")
+        logger.info("🚀 STARTING TOP 1000 GM COLLECTOR (SORTED BY RATING)")
         
-        # Priority Order:
-        # 1. Daily (often corresponds to Classical/Correspondence quality)
-        # 2. Live Rapid (High quality)
-        # 3. Live Blitz (Good volume, decent quality)
-        # 4. Live Bullet (High volume, lower quality - kept for tactical patterns)
-        categories = [
-            'daily',
-            'live_rapid',
-            'live_blitz',
-            'live_bullet',
-            'live_bughouse', # Sometimes fun patterns
-            'live_blitz960',
-            'daily960'
-        ]
-        
-        try:
-            while True:
-                self.state['collection_rounds'] += 1
-                round_num = self.state['collection_rounds']
+        while True:
+            self.state['collection_rounds'] += 1
+            logger.info(f"\n🔄 ROUND {self.state['collection_rounds']} START")
+            
+            # 1. Get Sorted GMs
+            # We do this every round to keep ratings fresh
+            players = self.get_sorted_gms()
+            
+            if not players:
+                logger.error("❌ Failed to get GMs, sleeping...")
+                time.sleep(60)
+                continue
                 
-                logger.info(f"\n{'#'*80}")
-                logger.info(f"🔄 ROUND #{round_num}")
-                logger.info(f"{'#'*80}\n")
-                
-                # 1. First Priority: Super GMs (GM Title)
-                # We do this every few rounds to catch new games from GMs
-                if round_num % 5 == 1:
-                    self.collect_titled_players('GM')
-                
-                # 2. Top Charts (Top 100 of each category)
-                for category in categories:
-                    self.collect_category(category, top_n=100)
-                    time.sleep(10)  # Pause between categories
-                
-                # Round complete
-                progress = (self.state['total_positions'] / 100_000_000) * 100
-                logger.info(f"\n{'#'*80}")
-                logger.info(f"✅ ROUND #{round_num} COMPLETE")
-                logger.info(f"{'#'*80}")
-                logger.info(f"📊 Games: {self.state['total_games']:,}")
-                logger.info(f"📊 Positions: {self.state['total_positions']:,}")
-                logger.info(f"📊 Players: {len(self.state['players_processed']):,}")
-                logger.info(f"📊 Progress: {progress:.3f}% to 100M")
-                logger.info(f"{'#'*80}\n")
-                
-                if self.state['total_positions'] >= 100_000_000:
-                    logger.info(f"🎉🎉🎉 100M POSITIONS REACHED! 🎉🎉🎉")
-                    logger.info(f"🔄 Continuing to expand dataset...\n")
-                
-                time.sleep(30)  # Pause before next round
-        
-        except KeyboardInterrupt:
-            logger.info(f"\n⏹️  Stopped")
-            logger.info(f"📊 Final: {self.state['total_games']:,} games, {self.state['total_positions']:,} positions")
+            # Take Top 1000
+            top_1000 = players[:1000]
+            logger.info(f"📋 Processing Top {len(top_1000)} GMs")
+            
+            # 2. Process Top 100 (Sync All)
+            logger.info("👑 Processing TOP 100 (Syncing ALL new games)...")
+            for i, p in enumerate(top_1000[:100]):
+                g, pos = self.sync_top_player(p)
+                if g > 0:
+                    logger.info(f"  [{i+1}/100] {p}: +{g} games")
+                if i % 10 == 0: self.save_state()
+            
+            # 3. Process 101-1000 (Dig 1000)
+            logger.info("⛏️  Processing 101-1000 (Digging 1000 games each)...")
+            for i, p in enumerate(top_1000[100:]):
+                real_rank = i + 101
+                g, pos = self.dig_deep_player(p, limit=1000)
+                if g > 0:
+                    logger.info(f"  [{real_rank}/1000] {p}: +{g} games (Deep Dig)")
+                if i % 10 == 0: self.save_state()
+            
             self.save_state()
-
-def main():
-    collector = MegaChessComCollector()
-    collector.run_forever()
+            logger.info("✅ Round Complete. Sleeping 60s...")
+            time.sleep(60)
 
 if __name__ == '__main__':
-    main()
+    MegaChessComCollector().run_forever()
