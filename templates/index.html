@@ -310,7 +310,7 @@
             $('#confidence').text('Thinking...');
             
             $.ajax({
-                url: '/api/best_move',
+                url: '/api/analyze',
                 type: 'POST',
                 contentType: 'application/json',
                 data: JSON.stringify({ fen: fen }),
@@ -323,6 +323,11 @@
                         // Highlight move
                         // TODO: Add board highlighting
                     }
+                },
+                error: function(xhr, status, error) {
+                    log("ERROR", "Engine analysis failed: " + error);
+                    $('#best-move').text('ERR');
+                    $('#confidence').text('Connection Failed');
                 }
             });
         }
