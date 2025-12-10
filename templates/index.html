@@ -321,7 +321,10 @@
                 url: '/api/analyze',
                 type: 'POST',
                 contentType: 'application/json',
-                data: JSON.stringify({ fen: fen }),
+                data: JSON.stringify({ 
+                    fen: fen,
+                    pgn: game.pgn() 
+                }),
                 success: function(response) {
                     if (response.best_move) {
                         $('#best-move').text(response.best_move);

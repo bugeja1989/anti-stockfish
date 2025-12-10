@@ -308,11 +308,26 @@ class ContinuousTrainer:
             self.save_state()
             return False
     
-    def get_best_move(self, fen: str) -> dict:
+    def get_best_move(self, fen: str, pgn: str = None) -> dict:
         """Get best move for position using the latest trained model"""
         try:
             board = chess.Board(fen)
             legal_moves = list(board.legal_moves)
+            
+            # Parse PGN to detect repetitions
+            history_fens = []
+            if pgn:
+                try:
+                    pgn_io = io.StringIO(pgn)
+                    game = chess.pgn.read_game(pgn_io)
+                    if game:
+                        temp_board = game.board()
+                        history_fens.append(temp_board.fen().split(' ')[0]) # Store position only (no clocks)
+                        for move in game.mainline_moves():
+                            temp_board.push(move)
+                            history_fens.append(temp_board.fen().split(' ')[0])
+                except Exception as e:
+                    logger.warning(f"Failed to parse PGN for repetition check: {e}")
             
             if not legal_moves:
                 return {'error': 'No legal moves'}
@@ -386,6 +401,10 @@ class ContinuousTrainer:
             for move in legal_moves:
                 board.push(move)
                 fen_after = board.fen()
+                fen_simple = fen_after.split(' ')[0] # Position only
+                
+                # Check for repetition
+                repetition_count = history_fens.count(fen_simple)
                 
                 # Convert to tensor
                 tensor = board_to_tensor(fen_after).unsqueeze(0).to(device)
@@ -402,6 +421,14 @@ class ContinuousTrainer:
                         
                     # Add chaos bonus (Anti-Stockfish prefers chaos!)
                     score += (chaos.item() * 0.1)
+                    
+                    # REPETITION PENALTY
+                    # If position has occurred 2+ times, apply massive penalty to avoid 3-fold repetition
+                    if repetition_count >= 2:
+                        score -= 10.0 # Massive penalty
+                        logger.info(f"🚫 Avoiding repetition: {move.uci()} (Count: {repetition_count})")
+                    elif repetition_count == 1:
+                        score -= 0.5 # Slight penalty for 2nd occurrence
                 
                 if score > best_eval:
                     best_eval = score
@@ -442,10 +469,12 @@ def get_stats():
 def analyze():
     data = request.json
     fen = data.get('fen')
+    pgn = data.get('pgn') # Get PGN for repetition check
+    
     if not fen:
         return jsonify({'error': 'No FEN provided'}), 400
     
-    result = trainer.get_best_move(fen)
+    result = trainer.get_best_move(fen, pgn)
     return jsonify(result)
 
 def run_flask():
