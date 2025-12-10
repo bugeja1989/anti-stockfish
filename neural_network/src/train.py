@@ -7,6 +7,7 @@ Anti-Stockfish: Optimized Training Script for Apple M4 Pro
 - Large batch sizes (1024+) for max throughput
 - Optimized for Apple Silicon
 - Supports Checkpointing & Resuming
+- Supports Run.Epoch Versioning (e.g., V1.3)
 """
 
 import torch
@@ -102,7 +103,13 @@ def train_epoch(chaos_model, sacrifice_model, dataloader, optimizer_chaos, optim
         if (batch_idx + 1) % 100 == 0:
             avg_loss = total_loss / num_batches
             percent = ((batch_idx + 1) / total_batches) * 100
-            logger.info(f"  Batch {batch_idx + 1}/{total_batches} ({percent:.1f}%) | Loss: {avg_loss:.8f}")
+            # Cap percentage at 100% for display purposes if estimation was off
+            if percent > 100:
+                percent_str = ">100%"
+            else:
+                percent_str = f"{percent:.1f}%"
+                
+            logger.info(f"  Batch {batch_idx + 1}/{total_batches} ({percent_str}) | Loss: {avg_loss:.8f}")
     
     return total_loss / max(1, num_batches)
 
@@ -114,6 +121,7 @@ def main():
     parser.add_argument('--device', default='mps', help='Device (mps, cuda, cpu)')
     parser.add_argument('--num-workers', type=int, default=4, help='DataLoader workers')
     parser.add_argument('--resume', action='store_true', help='Resume from latest checkpoint if available')
+    parser.add_argument('--run-id', type=int, default=1, help='Run ID for versioning (e.g. Run 1)')
     args = parser.parse_args()
     
     # Device setup
@@ -130,6 +138,7 @@ def main():
     logger.info(f"⚙️  Batch size: {args.batch_size}")
     logger.info(f"⚙️  Workers: {args.num_workers}")
     logger.info(f"⚙️  Epochs: {args.epochs}")
+    logger.info(f"🏷️  Run ID: {args.run_id}")
     
     # Load dataset (Streaming)
     dataset = StreamingChessDataset(args.data)
@@ -164,17 +173,19 @@ def main():
     # Checkpoint directory
     model_dir = Path("neural_network/models")
     model_dir.mkdir(parents=True, exist_ok=True)
-    chaos_path = model_dir / "chaos_module.pth"
-    sac_path = model_dir / "sacrifice_module.pth"
+    
+    # Base paths for latest model (always overwritten to allow resuming)
+    chaos_path_latest = model_dir / "chaos_module_latest.pth"
+    sac_path_latest = model_dir / "sacrifice_module_latest.pth"
     
     # Resume logic
     start_epoch = 0
     if args.resume:
-        if chaos_path.exists() and sac_path.exists():
+        if chaos_path_latest.exists() and sac_path_latest.exists():
             logger.info("🔄 Found existing models. Resuming training...")
             try:
-                chaos_model.load_state_dict(torch.load(chaos_path, map_location=device))
-                sacrifice_model.load_state_dict(torch.load(sac_path, map_location=device))
+                chaos_model.load_state_dict(torch.load(chaos_path_latest, map_location=device))
+                sacrifice_model.load_state_dict(torch.load(sac_path_latest, map_location=device))
                 logger.info("✅ Models loaded successfully!")
             except Exception as e:
                 logger.error(f"⚠️ Failed to load models: {e}. Starting from scratch.")
@@ -187,7 +198,10 @@ def main():
     
     # Training loop
     for epoch in range(start_epoch, args.epochs):
-        logger.info(f"Epoch {epoch + 1}/{args.epochs}")
+        current_epoch = epoch + 1
+        version_tag = f"v{args.run_id}.{current_epoch}"
+        
+        logger.info(f"Epoch {current_epoch}/{args.epochs} (Version {version_tag})")
         
         avg_loss = train_epoch(
             chaos_model,
@@ -199,12 +213,20 @@ def main():
             total_batches
         )
         
-        logger.info(f"✅ Epoch {epoch + 1} complete! Avg Loss: {avg_loss:.8f}")
+        logger.info(f"✅ Epoch {current_epoch} complete! Avg Loss: {avg_loss:.8f}")
         
-        # Save checkpoint after EVERY epoch
-        torch.save(chaos_model.state_dict(), chaos_path)
-        torch.save(sacrifice_model.state_dict(), sac_path)
-        logger.info(f"💾 Checkpoint saved to {model_dir}\n")
+        # 1. Save "Latest" for resuming
+        torch.save(chaos_model.state_dict(), chaos_path_latest)
+        torch.save(sacrifice_model.state_dict(), sac_path_latest)
+        
+        # 2. Save Versioned Checkpoint (e.g., chaos_module_v1.3.pth)
+        chaos_path_ver = model_dir / f"chaos_module_{version_tag}.pth"
+        sac_path_ver = model_dir / f"sacrifice_module_{version_tag}.pth"
+        torch.save(chaos_model.state_dict(), chaos_path_ver)
+        torch.save(sacrifice_model.state_dict(), sac_path_ver)
+        
+        logger.info(f"💾 Checkpoint saved: {version_tag}")
+        logger.info(f"   -> {chaos_path_ver}")
     
     logger.info(f"\n{'='*80}")
     logger.info(f"✅ TRAINING COMPLETE!")

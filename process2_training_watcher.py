@@ -246,7 +246,8 @@ class ContinuousTrainer:
                 "--batch-size", str(BATCH_SIZE),
                 "--device", device,
                 "--num-workers", "8",
-                "--resume"
+                "--resume",
+                "--run-id", str(self.state['models_trained'] + 1)
             ]
             
             logger.info(f"🚀 Executing: {' '.join(cmd)}")
