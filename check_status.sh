@@ -51,27 +51,27 @@ if [ "$EUID" -ne 0 ]; then
 else
     echo "Gathering 5 seconds of telemetry..."
     
-    # Run powermetrics once and save to temp file to avoid running it multiple times
-    # We use a broader set of samplers to ensure we catch everything
-    powermetrics --samplers cpu_power,gpu_power,thermal -n 1 -i 5000 > /tmp/as_metrics.txt 2>/dev/null
+    # Run powermetrics once and save to temp file
+    # Using -i 1000 (1s) and -n 1 to get a quick snapshot, but wait 5s to let it stabilize if needed?
+    # Actually, powermetrics needs a sample interval. Let's do 1 sample over 1000ms.
+    powermetrics --samplers cpu_power,gpu_power,thermal -n 1 -i 1000 > /tmp/as_metrics.txt 2>/dev/null
     
     echo "--- POWER & FREQUENCY ---"
-    # Grep for specific power metrics. Adjusting for potential output variations.
     grep -E "CPU Power|GPU Power|ANE Power|Package Power" /tmp/as_metrics.txt || echo "Power metrics not found."
     
     echo ""
     echo "--- GPU UTILIZATION ---"
-    grep -E "GPU Active|GPU Idle" /tmp/as_metrics.txt || echo "GPU utilization not found."
+    # Try case-insensitive grep for "active residency" or "GPU active"
+    grep -iE "GPU active|active residency" /tmp/as_metrics.txt || echo "GPU utilization not found."
 
     echo ""
     echo "--- THERMALS ---"
-    # Grep for Fan speed and Temperature. 
-    # M-series usually reports "Fan: x RPM" and "die temperature"
-    grep -iE "Fan|temp" /tmp/as_metrics.txt | grep -v "sensor" | head -n 10 || echo "Thermal metrics not found."
+    # M-series often outputs "Fan: 0 RPM" or just "Fan"
+    # Also look for "Average die temperature"
+    grep -iE "Fan|die temperature|Headroom" /tmp/as_metrics.txt | grep -v "sensor" | head -n 10
     
     echo ""
     echo "--- ANE (NEURAL ENGINE) STATUS ---"
-    # Specifically check for ANE power to answer user's question
     ANE_POWER=$(grep "ANE Power" /tmp/as_metrics.txt)
     if [ -z "$ANE_POWER" ]; then
         echo "ANE Power: 0 mW (Idle or not reported)"
