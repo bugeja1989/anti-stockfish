@@ -351,28 +351,59 @@ class ContinuousTrainer:
             best_move = None
             best_eval = -float('inf')
             
-            # Simple 1-ply search (evaluate resulting positions)
-            # TODO: Implement deeper search or MCTS later
+            # Helper function to convert board to tensor (copied from model.py to avoid import issues)
+            def board_to_tensor(fen):
+                import numpy as np
+                board = chess.Board(fen)
+                tensor = np.zeros((12, 8, 8), dtype=np.float32)
+                piece_idx = {
+                    chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2,
+                    chess.ROOK: 3, chess.QUEEN: 4, chess.KING: 5
+                }
+                for square in chess.SQUARES:
+                    piece = board.piece_at(square)
+                    if piece:
+                        row = 7 - (square // 8)
+                        col = square % 8
+                        channel = piece_idx[piece.piece_type]
+                        if piece.color == chess.BLACK:
+                            channel += 6
+                        tensor[channel, row, col] = 1.0
+                return torch.from_numpy(tensor)
+
+            # Evaluate all legal moves (1-ply search)
+            device = "mps" if torch.backends.mps.is_available() else "cpu"
             
-            # This part requires the same input encoding as training
-            # For now, we'll just return a random move to prove the pipeline works
-            # until we import the proper 'board_to_tensor' function
-            
-            # ---------------------------------------------------------
-            # TEMPORARY FIX: Return Random Move even if model is loaded
-            # Reason: We need to import 'board_to_tensor' from train.py
-            # but that might cause circular imports or path issues.
-            # To unblock the GUI, we will return a random move but
-            # label it as "Neural (Simulated)" so the user sees it working.
-            # ---------------------------------------------------------
-            
-            import random
-            best_move = random.choice(legal_moves)
+            for move in legal_moves:
+                board.push(move)
+                fen_after = board.fen()
+                
+                # Convert to tensor
+                tensor = board_to_tensor(fen_after).unsqueeze(0).to(device)
+                
+                # Inference
+                with torch.no_grad():
+                    policy, value, chaos = self.latest_model(tensor)
+                    
+                    # Score = Value (positional) + Chaos (complexity bonus)
+                    # We invert value if it's Black's turn (since model predicts White's advantage)
+                    score = value.item()
+                    if board.turn == chess.BLACK:
+                        score = -score
+                        
+                    # Add chaos bonus (Anti-Stockfish prefers chaos!)
+                    score += (chaos.item() * 0.1)
+                
+                if score > best_eval:
+                    best_eval = score
+                    best_move = move
+                
+                board.pop()
             
             return {
                 'best_move': best_move.uci(),
-                'eval': 0.5, # Placeholder eval
-                'model_version': self.model_version, # Clean version string
+                'eval': round(best_eval, 4),
+                'model_version': self.model_version,
                 'positions_trained': self.state['total_positions_extracted'],
                 'models_trained': self.state['models_trained']
             }
