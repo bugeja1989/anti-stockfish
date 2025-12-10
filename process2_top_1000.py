@@ -73,9 +73,12 @@ class Top1000Collector:
                     break
                 
                 url = f"https://lichess.org/api/player/top/200/{category}"
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
                 
                 try:
-                    response = requests.get(url, timeout=30)
+                    response = requests.get(url, headers=headers, timeout=30)
                     response.raise_for_status()
                     
                     data = response.json()
