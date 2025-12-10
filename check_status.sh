@@ -52,8 +52,7 @@ else
     echo "Gathering 5 seconds of telemetry..."
     
     # Run powermetrics once and save to temp file
-    # Using -i 1000 (1s) and -n 1 to get a quick snapshot, but wait 5s to let it stabilize if needed?
-    # Actually, powermetrics needs a sample interval. Let's do 1 sample over 1000ms.
+    # Using -i 1000 (1s) and -n 1 to get a quick snapshot
     powermetrics --samplers cpu_power,gpu_power,thermal -n 1 -i 1000 > /tmp/as_metrics.txt 2>/dev/null
     
     echo "--- POWER & FREQUENCY ---"
@@ -66,9 +65,19 @@ else
 
     echo ""
     echo "--- THERMALS ---"
-    # M-series often outputs "Fan: 0 RPM" or just "Fan"
-    # Also look for "Average die temperature"
-    grep -iE "Fan|die temperature|Headroom" /tmp/as_metrics.txt | grep -v "sensor" | head -n 10
+    # Try multiple patterns for thermals
+    # 1. Check for "Fan" or "rpm"
+    # 2. Check for "temperature" or "temp"
+    # 3. Fallback to sysctl if powermetrics fails
+    
+    THERMAL_OUTPUT=$(grep -iE "Fan|rpm|deg|temp" /tmp/as_metrics.txt | grep -v "sensor")
+    
+    if [ -n "$THERMAL_OUTPUT" ]; then
+        echo "$THERMAL_OUTPUT" | head -n 10
+    else
+        echo "⚠️  Powermetrics thermal data not found. Trying sysctl..."
+        sysctl machdep.xcpm.cpu_thermal_level 2>/dev/null || echo "sysctl thermal level not available."
+    fi
     
     echo ""
     echo "--- ANE (NEURAL ENGINE) STATUS ---"
