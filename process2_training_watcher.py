@@ -61,6 +61,10 @@ class ContinuousTrainer:
         
         self.load_state()
         self.stockfish_path = self.find_stockfish()
+        if self.stockfish_path:
+            logger.info(f"✅ Stockfish found at: {self.stockfish_path}")
+        else:
+            logger.warning("⚠️  Stockfish NOT found! Simulation mode will fail.")
 
     def find_stockfish(self):
         """Locate stockfish executable"""

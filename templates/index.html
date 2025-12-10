@@ -217,10 +217,17 @@
                 </div>
             </div>
 
-            <div class="analysis-box">
-                <div class="stat-label">NEURAL ENGINE SUGGESTION</div>
-                <div class="best-move" id="best-move">...</div>
-                <div style="font-size: 12px; color: #888;">CONFIDENCE: <span id="confidence">Calculating...</span></div>
+            <div style="display: flex; gap: 10px;">
+                <div class="analysis-box" style="flex: 1;">
+                    <div class="stat-label">ANTI-STOCKFISH SUGGESTION</div>
+                    <div class="best-move" id="best-move">...</div>
+                    <div style="font-size: 12px; color: #888;">CONFIDENCE: <span id="confidence">Calculating...</span></div>
+                </div>
+                <div class="analysis-box" style="flex: 1; border-color: #ff3333;">
+                    <div class="stat-label">STOCKFISH SUGGESTION</div>
+                    <div class="best-move" id="stockfish-move" style="color: #ff3333;">...</div>
+                    <div style="font-size: 12px; color: #888;">ELO: <span id="sf-elo-display">N/A</span></div>
+                </div>
             </div>
 
             <div class="analysis-box" style="margin-top: 10px; border-color: var(--accent-magenta);">
@@ -355,8 +362,11 @@
                         $('#confidence').text('Version ' + response.model_version);
                         log("ENGINE", `Suggests ${response.best_move} (${response.model_version})`);
                         
+                        // Update Stockfish suggestion for comparison
+                        getStockfishSuggestion();
+
                         if (simulationActive && game.turn() === 'w') {
-                            setTimeout(makeEngineMove, 500); // Auto-play move in simulation
+                            setTimeout(makeEngineMove, 1000); // Auto-play move in simulation
                         }
                     }
                 },
@@ -504,12 +514,37 @@
                         
                         if (!game.game_over()) {
                             // Now Anti-Stockfish's turn
-                            getBestMove();
+                            setTimeout(getBestMove, 500);
                         } else {
                             simulationActive = false;
                             $('#sim-btn').text("START SIMULATION").css('background', '#ff3333');
                             checkWinCondition(elo);
                         }
+                    }
+                },
+                error: function() {
+                    log("ERROR", "Stockfish failed to move. Retrying...");
+                    setTimeout(makeStockfishMove, 2000);
+                }
+            });
+        }
+
+        function getStockfishSuggestion() {
+            const elo = $('#stockfish-elo').val();
+            $('#sf-elo-display').text(elo);
+            $('#stockfish-move').text('...');
+            
+            $.ajax({
+                url: '/api/stockfish',
+                type: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({ 
+                    fen: game.fen(),
+                    elo: elo
+                }),
+                success: function(response) {
+                    if (response.best_move) {
+                        $('#stockfish-move').text(response.best_move);
                     }
                 }
             });
