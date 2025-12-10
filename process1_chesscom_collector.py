@@ -17,7 +17,7 @@ import time
 import logging
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 
 logging.basicConfig(
@@ -37,6 +37,7 @@ class MegaChessComCollector:
         
         self.dataset_file = self.data_dir / "chesscom_master_dataset.jsonl"
         self.state_file = Path("process1_state.json")
+        self.gm_cache_file = Path("gm_ratings_cache.json")
         
         self.REQUEST_DELAY = 0.25
         self.last_request_time = 0
@@ -109,7 +110,24 @@ class MegaChessComCollector:
         return self.make_request(f"https://api.chess.com/pub/player/{username}/stats")
 
     def get_sorted_gms(self) -> List[str]:
-        """Get ALL GMs, fetch their Rapid ratings, and sort them"""
+        """Get ALL GMs, fetch their Rapid ratings, and sort them. Uses cache if available."""
+        
+        # Check cache first
+        if self.gm_cache_file.exists():
+            try:
+                with open(self.gm_cache_file) as f:
+                    cache_data = json.load(f)
+                    cache_time = datetime.fromisoformat(cache_data.get('timestamp', '2000-01-01T00:00:00'))
+                    
+                    # If cache is less than 24 hours old, use it
+                    if datetime.now() - cache_time < timedelta(hours=24):
+                        logger.info(f"📂 Loaded sorted GM list from cache ({len(cache_data['players'])} players, {cache_time})")
+                        return cache_data['players']
+                    else:
+                        logger.info("⚠️  GM cache expired, refreshing...")
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to load GM cache: {e}")
+
         logger.info("📥 Fetching list of all GMs...")
         data = self.make_request("https://api.chess.com/pub/titled/GM")
         if not data or 'players' not in data:
@@ -119,17 +137,8 @@ class MegaChessComCollector:
         logger.info(f"📋 Found {len(all_gms)} GMs. Fetching ratings to sort...")
         
         gm_ratings = []
-        
-        # We need to fetch stats for EACH GM to get their live rapid rating.
-        # This is heavy, so we'll do it in batches or just accept the initial cost.
-        # To speed it up, we can try to use the leaderboard API first for the very top,
-        # but the user wants "Top 1000". Leaderboard usually gives top 50.
-        # So we MUST fetch stats for GMs.
-        
-        # Optimization: Check if we have a cached sorted list? No, ratings change.
-        # We will fetch stats for the first 2000 GMs (all of them basically).
-        
         count = 0
+        
         for username in all_gms:
             stats = self.get_player_stats(username)
             rating = 0
@@ -144,12 +153,26 @@ class MegaChessComCollector:
         # Sort by rating descending
         gm_ratings.sort(key=lambda x: x['rating'], reverse=True)
         
+        sorted_usernames = [p['username'] for p in gm_ratings]
+        
+        # Save to cache
+        try:
+            with open(self.gm_cache_file, 'w') as f:
+                json.dump({
+                    'timestamp': datetime.now().isoformat(),
+                    'players': sorted_usernames,
+                    'ratings': gm_ratings # Save ratings too for debugging/verification
+                }, f, indent=2)
+            logger.info(f"💾 Saved sorted GM list to {self.gm_cache_file}")
+        except Exception as e:
+            logger.error(f"❌ Failed to save GM cache: {e}")
+        
         # Log top 10 for verification
         logger.info("🏆 Top 10 GMs by Rapid Rating:")
         for i, p in enumerate(gm_ratings[:10]):
             logger.info(f"  #{i+1} {p['username']} ({p['rating']})")
             
-        return [p['username'] for p in gm_ratings]
+        return sorted_usernames
 
     def get_archives(self, username: str) -> List[str]:
         data = self.make_request(f"https://api.chess.com/pub/player/{username}/games/archives")
