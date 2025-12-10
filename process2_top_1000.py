@@ -63,20 +63,36 @@ class Top1000Collector:
         logger.info(f"📥 Fetching top {count} players from Lichess...")
         
         try:
-            url = "https://lichess.org/api/player/top/200"
-            response = requests.get(url, timeout=30)
-            response.raise_for_status()
-            
-            data = response.json()
             players = []
             
-            # Get players from all categories
-            for category in ['bullet', 'blitz', 'rapid', 'classical']:
-                if category in data:
-                    for player in data[category]:
-                        username = player.get('username')
+            # Fetch from multiple categories
+            categories = ['bullet', 'blitz', 'rapid', 'classical', 'ultraBullet']
+            
+            for category in categories:
+                if len(players) >= count:
+                    break
+                
+                url = f"https://lichess.org/api/player/top/200/{category}"
+                
+                try:
+                    response = requests.get(url, timeout=30)
+                    response.raise_for_status()
+                    
+                    data = response.json()
+                    
+                    for player in data.get('users', []):
+                        username = player.get('username') or player.get('id')
                         if username and username not in players:
                             players.append(username)
+                            if len(players) >= count:
+                                break
+                    
+                    logger.info(f"  ✅ {category}: {len(data.get('users', []))} players")
+                    time.sleep(1)  # Rate limiting between categories
+                
+                except Exception as e:
+                    logger.warning(f"  ⚠️  {category}: {e}")
+                    continue
             
             logger.info(f"✅ Fetched {len(players)} unique top players")
             return players[:count]

@@ -170,7 +170,7 @@ class SuperGMsCollector:
         
         # Chess.com requires User-Agent header
         headers = {
-            'User-Agent': 'Anti-Stockfish Chess Bot (https://github.com/bugeja1989/anti-stockfish)'
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
         
         try:
