@@ -8,12 +8,13 @@ Anti-Stockfish: Optimized Training Script for Apple M4 Pro
 - Optimized for Apple Silicon
 - Supports Checkpointing & Resuming
 - Supports Run.Epoch Versioning (e.g., V1.3)
+- Correctly shards data across workers to prevent duplication
 """
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import IterableDataset, DataLoader
+from torch.utils.data import IterableDataset, DataLoader, get_worker_info
 import json
 import logging
 import argparse
@@ -37,30 +38,45 @@ class StreamingChessDataset(IterableDataset):
         
     def __iter__(self):
         """Yields batches of data directly from file without loading everything to RAM."""
+        worker_info = get_worker_info()
+        
         with open(self.data_file) as f:
-            for line in f:
-                try:
-                    pos = json.loads(line)
-                    
-                    # Convert position to tensor
-                    board_tensor = board_to_tensor(pos['fen'])
-                    
-                    # Labels
-                    label_map = {'normal': 0, 'complex': 1, 'sacrifice': 2}
-                    label = label_map.get(pos.get('label', 'normal'), 0)
-                    
-                    # Evaluation (normalized)
-                    eval_score = pos.get('eval', 0.0)
-                    eval_normalized = max(-1.0, min(1.0, eval_score / 10.0))
-                    
-                    yield {
-                        'board': board_tensor,
-                        'label': torch.tensor(label, dtype=torch.long),
-                        'eval': torch.tensor(eval_normalized, dtype=torch.float32),
-                        'chaos': torch.tensor(1.0 if label == 2 else 0.5 if label == 1 else 0.0, dtype=torch.float32)
-                    }
-                except:
-                    continue
+            # If multiple workers, shard the file
+            if worker_info is not None:
+                # Skip lines not meant for this worker
+                # Worker 0 reads 0, N, 2N...
+                # Worker 1 reads 1, N+1, 2N+1...
+                for i, line in enumerate(f):
+                    if i % worker_info.num_workers == worker_info.id:
+                        yield self.process_line(line)
+            else:
+                # Single process
+                for line in f:
+                    yield self.process_line(line)
+
+    def process_line(self, line):
+        try:
+            pos = json.loads(line)
+            
+            # Convert position to tensor
+            board_tensor = board_to_tensor(pos['fen'])
+            
+            # Labels
+            label_map = {'normal': 0, 'complex': 1, 'sacrifice': 2}
+            label = label_map.get(pos.get('label', 'normal'), 0)
+            
+            # Evaluation (normalized)
+            eval_score = pos.get('eval', 0.0)
+            eval_normalized = max(-1.0, min(1.0, eval_score / 10.0))
+            
+            return {
+                'board': board_tensor,
+                'label': torch.tensor(label, dtype=torch.long),
+                'eval': torch.tensor(eval_normalized, dtype=torch.float32),
+                'chaos': torch.tensor(1.0 if label == 2 else 0.5 if label == 1 else 0.0, dtype=torch.float32)
+            }
+        except:
+            return None
 
 def train_epoch(chaos_model, sacrifice_model, dataloader, optimizer_chaos, optimizer_sac, device, total_batches):
     """Train for one epoch."""
@@ -71,6 +87,9 @@ def train_epoch(chaos_model, sacrifice_model, dataloader, optimizer_chaos, optim
     num_batches = 0
     
     for batch_idx, batch in enumerate(dataloader):
+        # Filter out failed parses (None)
+        if batch is None: continue
+        
         board = batch['board'].to(device)
         label = batch['label'].to(device)
         eval_target = batch['eval'].to(device)
@@ -155,11 +174,19 @@ def main():
     logger.info(f"📊 Total positions: {total_lines:,}")
     logger.info(f"📦 Total batches per epoch: {total_batches:,}")
 
+    def collate_fn(batch):
+        # Filter out None values from process_line failures
+        batch = [item for item in batch if item is not None]
+        if not batch:
+            return None
+        return torch.utils.data.dataloader.default_collate(batch)
+
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        pin_memory=False  # Disabled for MPS stability
+        pin_memory=False,  # Disabled for MPS stability
+        collate_fn=collate_fn
     )
     
     # Models
