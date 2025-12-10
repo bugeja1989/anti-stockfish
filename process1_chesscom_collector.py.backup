@@ -1,0 +1,292 @@
+#!/usr/bin/env python3
+
+"""
+Anti-Stockfish Process 1: Ultimate Chess.com Collector
+Strategy: Super GMs + Top 500 per category (bullet, blitz, rapid, classical, ultraBullet)
+Total: ~2,600 unique players
+Collection: ONE player at a time, 500 games per batch
+"""
+
+import requests
+import json
+import time
+import logging
+from pathlib import Path
+from datetime import datetime
+import sys
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - [P1-CHESSCOM] - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('process1_chesscom.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+class ChesscomCollector:
+    """Collect from Chess.com: Super GMs + Top 500 per category"""
+    
+    def __init__(self):
+        self.data_dir = Path("neural_network/data")
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        
+        self.dataset_file = self.data_dir / "chesscom_master_dataset.jsonl"
+        self.state_file = Path("process1_state.json")
+        
+        self.GAMES_PER_BATCH = 500
+        self.DELAY_BETWEEN_PLAYERS = 5  # seconds
+        
+        # Super GMs (priority)
+        self.SUPER_GMS = [
+            "MagnusCarlsen", "Hikaru", "FabianoCaruana", "DanielNaroditsky",
+            "GothamChess", "GMHikaru", "GMWSO", "Firouzja2003",
+            "GMAkopyan", "GMBenjaminBok", "GMDanielNaroditsky",
+            "GMLevonAronian", "GMWesley_So", "GMMaximeVachierLagrave",
+            "GMAnishGiri", "GMIanNepomniachtchi", "GMAlexanderGrischuk",
+            "GMTeimourRadjabov", "GMShakhriyarMamedyarov", "GMViditGujrathi",
+            "GMPentalaHarikrishna", "GMDingLiren", "GMRichardRapport",
+            "GMSamShankland", "GMLeinier", "GMYuYangyi",
+            "GMWangHao", "GMNikolozKachieshvili", "GMDavidAnton",
+            "GMJanKrzysztofDuda", "GMRadoslaw", "GMMateuszBartel",
+            "GMDavidNavara", "GMPavelEljanov", "GMKirill",
+            "GMLazaroB", "GMErnesto", "GMYuriy",
+            "GMSergeyKarjakin", "GMPeterSvidler", "GMVladimirKramnik",
+            "GMBorisGelfand", "GMEvgenyTomashevsky", "GMAlexeiShirov",
+            "GMPeterLeko", "GMVassily", "GMEtienne",
+            "GMLoek", "GMJordiFluviaDomingo", "GMFrancisco",
+            "GMDavidHowell", "GMLukeM", "GMGawainJones",
+            "GMMatthew", "GMNigelShort", "GMMichael",
+            "GMJohnNunn", "GMJonSpeelman", "GMTony",
+            "GMAlexander", "GMVladimir", "GMBoris",
+            "GMEvgeny", "GMAlexei", "GMPeter",
+            "GMVassily", "GMEtienne", "GMLoek",
+            "GMJordi", "GMFrancisco", "GMDavid",
+            "GMLuke", "GMGawain", "GMMatthew",
+            "GMNigel", "GMMichael", "GMJohn",
+            "GMJon", "GMTony", "GMAlexander",
+            "GMVladimir", "GMBoris", "GMEvgeny",
+            "GMAlexei", "GMPeter", "GMVassily",
+            "GMEtienne", "GMLoek", "GMJordi",
+            "GMFrancisco", "GMDavid", "GMLuke",
+            "GMGawain", "GMMatthew", "GMNigel",
+            "GMMichael", "GMJohn", "GMJon"
+        ]
+        
+        self.load_state()
+    
+    def load_state(self):
+        """Load state"""
+        if self.state_file.exists():
+            with open(self.state_file) as f:
+                self.state = json.load(f)
+            logger.info(f"📊 Loaded: {len(self.state['all_players'])} players, {self.state['current_index']} processed")
+        else:
+            self.state = {
+                'all_players': [],
+                'current_index': 0,
+                'player_games': {},
+                'total_games': 0,
+                'started_at': datetime.now().isoformat()
+            }
+            logger.info("🆕 Starting fresh")
+    
+    def save_state(self):
+        """Save state"""
+        with open(self.state_file, 'w') as f:
+            json.dump(self.state, f, indent=2)
+    
+    def fetch_top_players_by_category(self, category, count=500):
+        """Fetch top players from Chess.com by category"""
+        logger.info(f"📥 Fetching top {count} {category} players from Chess.com...")
+        
+        try:
+            # Chess.com leaderboard API
+            url = f"https://api.chess.com/pub/leaderboards"
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+            
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            data = response.json()
+            
+            # Get players from the category
+            category_data = data.get(category, [])
+            players = []
+            
+            for player in category_data[:count]:
+                username = player.get('username')
+                if username:
+                    players.append(username)
+            
+            logger.info(f"  ✅ {category}: {len(players)} players")
+            return players
+        
+        except Exception as e:
+            logger.error(f"  ❌ {category}: {e}")
+            return []
+    
+    def fetch_all_players(self):
+        """Fetch all players: Super GMs + Top 500 per category"""
+        logger.info("📥 Fetching ALL players from Chess.com...")
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("PHASE 1: SUPER GMS")
+        logger.info("=" * 80)
+        
+        all_players = []
+        
+        # Phase 1: Super GMs (priority)
+        logger.info(f"📥 Adding {len(self.SUPER_GMS)} Super GMs...")
+        all_players.extend(self.SUPER_GMS)
+        logger.info(f"  ✅ Super GMs: {len(self.SUPER_GMS)} players")
+        
+        # Phase 2: Top 500 per category
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("PHASE 2: TOP 500 PER CATEGORY")
+        logger.info("=" * 80)
+        
+        categories = ['daily', 'daily960', 'live_rapid', 'live_blitz', 'live_bullet']
+        
+        for category in categories:
+            players = self.fetch_top_players_by_category(category, count=500)
+            for player in players:
+                if player not in all_players:
+                    all_players.append(player)
+            time.sleep(2)  # Rate limiting between categories
+        
+        # Remove duplicates while preserving order
+        unique_players = []
+        seen = set()
+        for player in all_players:
+            if player not in seen:
+                unique_players.append(player)
+                seen.add(player)
+        
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info(f"✅ TOTAL UNIQUE PLAYERS: {len(unique_players)}")
+        logger.info("=" * 80)
+        
+        return unique_players
+    
+    def collect_games_from_player(self, username):
+        """Collect games from a Chess.com player"""
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+            
+            # Get archives list
+            archives_url = f"https://api.chess.com/pub/player/{username}/games/archives"
+            response = requests.get(archives_url, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            archives = response.json().get('archives', [])
+            
+            if not archives:
+                return []
+            
+            # Get games from most recent archives
+            all_games = []
+            for archive_url in reversed(archives):
+                if len(all_games) >= self.GAMES_PER_BATCH:
+                    break
+                
+                try:
+                    response = requests.get(archive_url, headers=headers, timeout=30)
+                    response.raise_for_status()
+                    
+                    games = response.json().get('games', [])
+                    all_games.extend(games)
+                    
+                    time.sleep(0.5)  # Small delay between archive requests
+                
+                except Exception as e:
+                    logger.warning(f"    ⚠️  Archive error: {e}")
+                    continue
+            
+            return all_games[:self.GAMES_PER_BATCH]
+        
+        except Exception as e:
+            logger.error(f"  ❌ {username}: {e}")
+            return []
+    
+    def save_games(self, username, games):
+        """Save games to dataset"""
+        if not games:
+            return
+        
+        with open(self.dataset_file, 'a') as f:
+            entry = {
+                'source': 'chesscom',
+                'username': username,
+                'games': games,
+                'collected_at': datetime.now().isoformat()
+            }
+            f.write(json.dumps(entry) + '\n')
+    
+    def run(self):
+        """Main collection loop"""
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("🏆 ANTI-STOCKFISH: ULTIMATE CHESS.COM COLLECTOR")
+        logger.info("=" * 80)
+        logger.info("")
+        
+        # Fetch all players if not already done
+        if not self.state['all_players']:
+            self.state['all_players'] = self.fetch_all_players()
+            self.save_state()
+        
+        logger.info(f"📊 Total players: {len(self.state['all_players'])}")
+        logger.info("")
+        
+        # Collect from each player
+        while self.state['current_index'] < len(self.state['all_players']):
+            username = self.state['all_players'][self.state['current_index']]
+            
+            logger.info("")
+            logger.info("=" * 80)
+            logger.info(f"👤 PLAYER {self.state['current_index'] + 1}/{len(self.state['all_players'])}: {username}")
+            logger.info("=" * 80)
+            logger.info("")
+            
+            logger.info(f"📥 Collecting {self.GAMES_PER_BATCH} games from {username} (Chess.com)...")
+            
+            games = self.collect_games_from_player(username)
+            
+            if games:
+                self.save_games(username, games)
+                self.state['player_games'][username] = len(games)
+                self.state['total_games'] += len(games)
+                logger.info(f"  ✅ {username}: {len(games)} games from Chess.com")
+            else:
+                logger.warning(f"  ⚠️  {username}: No games found")
+                logger.warning(f"⏭️  Skipping {username}")
+            
+            self.state['current_index'] += 1
+            logger.info(f"✅ Progress: {self.state['current_index']}/{len(self.state['all_players'])} complete")
+            logger.info(f"📊 Total games collected: {self.state['total_games']}")
+            
+            self.save_state()
+            
+            # Delay between players
+            logger.info("")
+            time.sleep(self.DELAY_BETWEEN_PLAYERS)
+        
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("🎉 COLLECTION COMPLETE!")
+        logger.info("=" * 80)
+        logger.info(f"📊 Total players: {len(self.state['all_players'])}")
+        logger.info(f"📊 Total games: {self.state['total_games']}")
+        logger.info("=" * 80)
+
+if __name__ == "__main__":
+    collector = ChesscomCollector()
+    collector.run()

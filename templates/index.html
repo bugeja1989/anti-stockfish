@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ANTI-STOCKFISH | NEURAL CHAOS</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #050505;
+            --panel-bg: #0a0a0a;
+            --text-color: #e0e0e0;
+            --accent-cyan: #00f3ff;
+            --accent-magenta: #ff00ff;
+            --accent-green: #39ff14;
+            --border-color: #333;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'JetBrains Mono', monospace;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 24px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--accent-cyan);
+            text-shadow: 0 0 10px rgba(0, 243, 255, 0.5);
+        }
+
+        .status-badge {
+            background: rgba(57, 255, 20, 0.1);
+            border: 1px solid var(--accent-green);
+            color: var(--accent-green);
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        .main-container {
+            display: flex;
+            gap: 20px;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .board-container {
+            flex: 0 0 auto;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        #board {
+            width: 600px;
+            border: 2px solid var(--accent-cyan);
+            box-shadow: 0 0 20px rgba(0, 243, 255, 0.2);
+        }
+
+        .info-panel {
+            flex: 1;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            overflow-y: auto;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 15px;
+            border-left: 3px solid var(--accent-magenta);
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 5px;
+        }
+
+        .stat-value {
+            font-size: 20px;
+            font-weight: bold;
+        }
+
+        .analysis-box {
+            background: rgba(0, 243, 255, 0.05);
+            border: 1px solid var(--accent-cyan);
+            padding: 15px;
+            margin-top: 20px;
+        }
+
+        .best-move {
+            font-size: 32px;
+            color: var(--accent-cyan);
+            font-weight: bold;
+            margin: 10px 0;
+        }
+
+        .log-container {
+            flex: 1;
+            background: #000;
+            border: 1px solid var(--border-color);
+            padding: 10px;
+            font-size: 12px;
+            color: #888;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+        }
+
+        .log-entry {
+            margin-bottom: 5px;
+            border-bottom: 1px solid #111;
+            padding-bottom: 2px;
+        }
+
+        .log-time {
+            color: var(--accent-magenta);
+            margin-right: 10px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        button {
+            background: transparent;
+            border: 1px solid var(--accent-cyan);
+            color: var(--accent-cyan);
+            padding: 10px 20px;
+            font-family: 'JetBrains Mono', monospace;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-transform: uppercase;
+        }
+
+        button:hover {
+            background: var(--accent-cyan);
+            color: #000;
+            box-shadow: 0 0 15px var(--accent-cyan);
+        }
+
+        .highlight-white {
+            box-shadow: inset 0 0 3px 3px yellow;
+        }
+        .highlight-black {
+            box-shadow: inset 0 0 3px 3px blue;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Anti-Stockfish <span style="font-size: 14px; color: #666;">// NEURAL CHAOS ENGINE</span></h1>
+        <div class="status-badge" id="training-status">TRAINING ACTIVE</div>
+    </div>
+
+    <div class="main-container">
+        <div class="board-container">
+            <div id="board" style="width: 600px"></div>
+            <div class="controls">
+                <button onclick="resetGame()">New Game</button>
+                <button onclick="flipBoard()">Flip Board</button>
+                <button onclick="makeEngineMove()">Force Move</button>
+            </div>
+        </div>
+
+        <div class="info-panel">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">MODELS TRAINED</div>
+                    <div class="stat-value" id="models-count">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">POSITIONS LEARNED</div>
+                    <div class="stat-value" id="positions-count">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">CURRENT VERSION</div>
+                    <div class="stat-value" id="model-version">v0.0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">GPU STATUS</div>
+                    <div class="stat-value" style="color: var(--accent-green)">METAL ACTIVE</div>
+                </div>
+            </div>
+
+            <div class="analysis-box">
+                <div class="stat-label">NEURAL ENGINE SUGGESTION</div>
+                <div class="best-move" id="best-move">...</div>
+                <div style="font-size: 12px; color: #888;">CONFIDENCE: <span id="confidence">Calculating...</span></div>
+            </div>
+
+            <div class="log-container" id="log-output">
+                <div class="log-entry"><span class="log-time">SYSTEM</span> Initializing Neural Chaos Engine...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        var board = null
+        var game = new Chess()
+        var $status = $('#status')
+        var $fen = $('#fen')
+        var $pgn = $('#pgn')
+
+        function onDragStart (source, piece, position, orientation) {
+            // do not pick up pieces if the game is over
+            if (game.game_over()) return false
+
+            // only pick up pieces for the side to move
+            if ((game.turn() === 'w' && piece.search(/^b/) !== -1) ||
+                (game.turn() === 'b' && piece.search(/^w/) !== -1)) {
+                return false
+            }
+        }
+
+        function onDrop (source, target) {
+            // see if the move is legal
+            var move = game.move({
+                from: source,
+                to: target,
+                promotion: 'q' // NOTE: always promote to a queen for example simplicity
+            })
+
+            // illegal move
+            if (move === null) return 'snapback'
+
+            updateStatus()
+            getBestMove()
+        }
+
+        function onSnapEnd () {
+            board.position(game.fen())
+        }
+
+        function updateStatus () {
+            var status = ''
+
+            var moveColor = 'White'
+            if (game.turn() === 'b') {
+                moveColor = 'Black'
+            }
+
+            // checkmate?
+            if (game.in_checkmate()) {
+                status = 'Game over, ' + moveColor + ' is in checkmate.'
+            }
+
+            // draw?
+            else if (game.in_draw()) {
+                status = 'Game over, drawn position'
+            }
+
+            // game still on
+            else {
+                status = moveColor + ' to move'
+
+                // check?
+                if (game.in_check()) {
+                    status += ', ' + moveColor + ' is in check'
+                }
+            }
+            
+            log("GAME", status)
+        }
+
+        function log(source, message) {
+            const time = new Date().toLocaleTimeString();
+            const entry = `<div class="log-entry"><span class="log-time">${time}</span> [${source}] ${message}</div>`;
+            const container = document.getElementById('log-output');
+            container.innerHTML = entry + container.innerHTML;
+        }
+
+        function getBestMove() {
+            const fen = game.fen();
+            $('#best-move').text('...');
+            $('#confidence').text('Thinking...');
+            
+            $.ajax({
+                url: '/api/best_move',
+                type: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({ fen: fen }),
+                success: function(response) {
+                    if (response.best_move) {
+                        $('#best-move').text(response.best_move);
+                        $('#confidence').text('Version ' + response.model_version);
+                        log("ENGINE", `Suggests ${response.best_move} (v${response.model_version})`);
+                        
+                        // Highlight move
+                        // TODO: Add board highlighting
+                    }
+                }
+            });
+        }
+
+        function updateStats() {
+            $.get('/api/stats', function(data) {
+                $('#models-count').text(data.models_trained);
+                $('#positions-count').text(data.positions_extracted.toLocaleString());
+                $('#model-version').text('v' + data.model_version);
+                
+                if (data.training_active) {
+                    $('#training-status').text('TRAINING ACTIVE').css('color', '#39ff14');
+                } else {
+                    $('#training-status').text('IDLE').css('color', '#888');
+                }
+            });
+        }
+
+        function resetGame() {
+            game.reset();
+            board.start();
+            updateStatus();
+            log("SYSTEM", "Game reset");
+        }
+
+        function flipBoard() {
+            board.flip();
+        }
+        
+        function makeEngineMove() {
+            const bestMove = $('#best-move').text();
+            if (bestMove && bestMove !== '...') {
+                game.move(bestMove, {sloppy: true});
+                board.position(game.fen());
+                updateStatus();
+                getBestMove();
+            }
+        }
+
+        var config = {
+            draggable: true,
+            position: 'start',
+            onDragStart: onDragStart,
+            onDrop: onDrop,
+            onSnapEnd: onSnapEnd,
+            pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png'
+        }
+        
+        board = Chessboard('board', config)
+
+        updateStatus()
+        
+        // Poll for stats every 2 seconds
+        setInterval(updateStats, 2000);
+        
+        // Initial stats
+        updateStats();
+    </script>
+</body>
+</html>
