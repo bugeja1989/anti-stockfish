@@ -3,7 +3,10 @@
 """
 Anti-Stockfish Process 1: Ultimate Chess.com Collector
 GOAL: 100,000,000+ games and positions
-Strategy: Continuously cycle through all categories, expanding player pool
+Strategy:
+1. Prioritize Super GMs (Classical/Rapid)
+2. Collect from ALL top charts (Top 100)
+3. Filter for high-quality games (Classical/Rapid/Blitz)
 """
 
 import requests
@@ -109,7 +112,7 @@ class MegaChessComCollector:
                     time.sleep(2 ** attempt)
         return None
     
-    def get_leaderboard_players(self, category: str, top_n: int = 500) -> List[str]:
+    def get_leaderboard_players(self, category: str, top_n: int = 100) -> List[str]:
         """Get top players from leaderboard"""
         data = self.make_request("https://api.chess.com/pub/leaderboards")
         if not data or category not in data:
@@ -123,6 +126,11 @@ class MegaChessComCollector:
         
         return players
     
+    def get_titled_players(self, title: str) -> List[str]:
+        """Get all players with a specific title (GM, IM, etc.)"""
+        data = self.make_request(f"https://api.chess.com/pub/titled/{title}")
+        return data.get('players', []) if data else []
+
     def get_player_archives(self, username: str) -> List[str]:
         """Get monthly archives for player"""
         data = self.make_request(f"https://api.chess.com/pub/player/{username}/games/archives")
@@ -148,30 +156,40 @@ class MegaChessComCollector:
         total_games = 0
         total_positions = 0
         
-        # Get last 12 months
-        for archive_url in reversed(archives[-12:]):
+        # Get last 24 months (2 years) for high quality games
+        for archive_url in reversed(archives[-24:]):
             games = self.get_archive_games(archive_url)
             
             if games:
+                # Filter for Classical/Rapid/Blitz (exclude Bullet/Hyperbullet if possible, but we take all for volume)
+                # Prioritize standard chess
+                filtered_games = [
+                    g for g in games 
+                    if g.get('rules') == 'chess' and g.get('time_class') in ['rapid', 'classical', 'blitz', 'daily']
+                ]
+                
+                if not filtered_games:
+                    continue
+
                 # Save to dataset
                 entry = {
                     'player': username,
                     'archive': archive_url,
                     'collected_at': datetime.now().isoformat(),
-                    'games': games
+                    'games': filtered_games
                 }
                 
                 with open(self.dataset_file, 'a') as f:
                     f.write(json.dumps(entry) + '\n')
                 
                 # Count
-                for game in games:
+                for game in filtered_games:
                     total_positions += self.estimate_positions(game)
-                total_games += len(games)
+                total_games += len(filtered_games)
         
         return total_games, total_positions
     
-    def collect_category(self, category: str, top_n: int = 500):
+    def collect_category(self, category: str, top_n: int = 100):
         """Collect from category"""
         logger.info(f"\n{'='*80}")
         logger.info(f"🎯 CATEGORY: {category.upper()} (Top {top_n})")
@@ -211,6 +229,36 @@ class MegaChessComCollector:
         logger.info(f"📊 TOTAL: {self.state['total_games']:,} games, {self.state['total_positions']:,} positions\n")
         
         self.save_state()
+
+    def collect_titled_players(self, title: str):
+        """Collect all players with a specific title"""
+        logger.info(f"\n{'='*80}")
+        logger.info(f"🏆 TITLE: {title} (All Players)")
+        logger.info(f"{'='*80}\n")
+        
+        players = self.get_titled_players(title)
+        logger.info(f"📥 Found {len(players)} {title}s")
+        
+        new_players = 0
+        
+        for i, username in enumerate(players, 1):
+            if username in self.state['players_processed']:
+                continue
+                
+            logger.info(f"[{i}/{len(players)}] {username} ({title})...")
+            games, positions = self.collect_player(username)
+            
+            if games > 0:
+                self.state['players_processed'].add(username)
+                self.state['total_games'] += games
+                self.state['total_positions'] += positions
+                new_players += 1
+                logger.info(f"  ✅ {games} games, ~{positions:,} positions")
+                
+                if new_players % 10 == 0:
+                    self.save_state()
+        
+        self.save_state()
     
     def run_forever(self):
         """Run continuous collection"""
@@ -221,11 +269,18 @@ class MegaChessComCollector:
         logger.info(f"📊 Current: {self.state['total_positions']:,} positions ({(self.state['total_positions']/100_000_000)*100:.3f}%)")
         logger.info(f"{'='*80}\n")
         
+        # Priority Order:
+        # 1. Daily (often corresponds to Classical/Correspondence quality)
+        # 2. Live Rapid (High quality)
+        # 3. Live Blitz (Good volume, decent quality)
+        # 4. Live Bullet (High volume, lower quality - kept for tactical patterns)
         categories = [
-            'live_bullet',
-            'live_blitz', 
-            'live_rapid',
             'daily',
+            'live_rapid',
+            'live_blitz',
+            'live_bullet',
+            'live_bughouse', # Sometimes fun patterns
+            'live_blitz960',
             'daily960'
         ]
         
@@ -238,8 +293,14 @@ class MegaChessComCollector:
                 logger.info(f"🔄 ROUND #{round_num}")
                 logger.info(f"{'#'*80}\n")
                 
+                # 1. First Priority: Super GMs (GM Title)
+                # We do this every few rounds to catch new games from GMs
+                if round_num % 5 == 1:
+                    self.collect_titled_players('GM')
+                
+                # 2. Top Charts (Top 100 of each category)
                 for category in categories:
-                    self.collect_category(category, top_n=500)
+                    self.collect_category(category, top_n=100)
                     time.sleep(10)  # Pause between categories
                 
                 # Round complete
