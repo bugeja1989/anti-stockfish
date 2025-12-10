@@ -15,6 +15,7 @@ from pathlib import Path
 import json
 import chess
 import chess.pgn
+import chess.engine
 import io
 import torch
 from flask import Flask, request, jsonify, render_template
@@ -59,6 +60,24 @@ class ContinuousTrainer:
         self.model_version = "v0"
         
         self.load_state()
+        self.stockfish_path = self.find_stockfish()
+
+    def find_stockfish(self):
+        """Locate stockfish executable"""
+        import shutil
+        path = shutil.which("stockfish")
+        if path:
+            return path
+        # Common paths
+        paths = [
+            "/usr/games/stockfish",
+            "/usr/local/bin/stockfish",
+            "/opt/homebrew/bin/stockfish"
+        ]
+        for p in paths:
+            if Path(p).exists():
+                return p
+        return None
     
     def load_state(self):
         """Load state with migration support"""
@@ -308,6 +327,29 @@ class ContinuousTrainer:
             self.save_state()
             return False
     
+    def get_stockfish_move(self, fen: str, elo: int) -> dict:
+        """Get move from Stockfish at specific ELO"""
+        if not self.stockfish_path:
+            return {'error': 'Stockfish not found'}
+            
+        try:
+            board = chess.Board(fen)
+            
+            # Limit ELO (Stockfish supports UCI_LimitStrength and UCI_Elo)
+            with chess.engine.SimpleEngine.popen_uci(self.stockfish_path) as engine:
+                # Configure ELO
+                engine.configure({"UCI_LimitStrength": True, "UCI_Elo": elo})
+                
+                # Time limit based on ELO (give it a bit more time for higher ELOs)
+                time_limit = 0.1 if elo < 1500 else 0.5 if elo < 2500 else 1.0
+                
+                result = engine.play(board, chess.engine.Limit(time=time_limit))
+                return {'best_move': result.move.uci(), 'elo': elo}
+                
+        except Exception as e:
+            logger.error(f"Stockfish error: {e}")
+            return {'error': str(e)}
+
     def get_best_move(self, fen: str, pgn: str = None) -> dict:
         """Get best move for position using the latest trained model"""
         try:
@@ -475,6 +517,18 @@ def analyze():
         return jsonify({'error': 'No FEN provided'}), 400
     
     result = trainer.get_best_move(fen, pgn)
+    return jsonify(result)
+
+@app.route('/api/stockfish', methods=['POST'])
+def stockfish_move():
+    data = request.json
+    fen = data.get('fen')
+    elo = int(data.get('elo', 1500))
+    
+    if not fen:
+        return jsonify({'error': 'No FEN provided'}), 400
+        
+    result = trainer.get_stockfish_move(fen, elo)
     return jsonify(result)
 
 def run_flask():

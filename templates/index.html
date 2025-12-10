@@ -229,6 +229,29 @@
                 <button onclick="copyPGN()" style="margin-top: 10px; width: 100%; font-size: 10px; padding: 5px;">COPY PGN FOR CHESS.COM</button>
             </div>
 
+            <div class="analysis-box" style="margin-top: 10px; border-color: #ff3333;">
+                <div class="stat-label">SIMULATION MODE (VS STOCKFISH)</div>
+                <div style="margin-bottom: 10px;">
+                    <label style="color: #aaa; font-size: 12px;">STOCKFISH ELO:</label>
+                    <select id="stockfish-elo" style="background: #222; color: #fff; border: 1px solid #444; padding: 5px;">
+                        <option value="300">300 (Beginner)</option>
+                        <option value="600">600</option>
+                        <option value="900">900</option>
+                        <option value="1200">1200</option>
+                        <option value="1500" selected>1500 (Intermediate)</option>
+                        <option value="1800">1800</option>
+                        <option value="2100">2100</option>
+                        <option value="2400">2400 (Master)</option>
+                        <option value="2700">2700 (Grandmaster)</option>
+                        <option value="3000">3000</option>
+                        <option value="3300">3300</option>
+                        <option value="3600">3600 (Superhuman)</option>
+                    </select>
+                </div>
+                <button id="sim-btn" onclick="toggleSimulation()" style="width: 100%; font-size: 12px; padding: 8px; background: #ff3333; color: white; border: none; cursor: pointer;">START SIMULATION</button>
+                <div id="sim-status" style="margin-top: 5px; font-size: 10px; color: #ff3333;"></div>
+            </div>
+
             <div class="log-container" id="log-output">
                 <div class="log-entry"><span class="log-time">SYSTEM</span> Initializing Neural Chaos Engine...</div>
             </div>
@@ -241,6 +264,8 @@
         var $status = $('#status')
         var $fen = $('#fen')
         var $pgn = $('#pgn')
+        var simulationActive = false;
+        var simulationInterval = null;
 
         function onDragStart (source, piece, position, orientation) {
             // do not pick up pieces if the game is over
@@ -316,8 +341,7 @@
             const fen = game.fen();
             $('#best-move').text('...');
             $('#confidence').text('Thinking...');
-            
-            $.ajax({
+                   $.ajax({
                 url: '/api/analyze',
                 type: 'POST',
                 contentType: 'application/json',
@@ -331,12 +355,17 @@
                         $('#confidence').text('Version ' + response.model_version);
                         log("ENGINE", `Suggests ${response.best_move} (${response.model_version})`);
                         
-                        // Highlight move
-                        // TODO: Add board highlighting
+                        if (simulationActive && game.turn() === 'w') {
+                            setTimeout(makeEngineMove, 500); // Auto-play move in simulation
+                        }
                     }
                 },
-                error: function(xhr, status, error) {
-                    log("ERROR", "Engine analysis failed: " + error);
+                error: function() {
+                    $('#confidence').text('Connection Failed');
+                    $('#best-move').text('ERR');
+                }
+            });
+        }           log("ERROR", "Engine analysis failed: " + error);
                     $('#best-move').text('ERR');
                     $('#confidence').text('Connection Failed');
                 }
@@ -423,7 +452,84 @@
                 saveGameState();
                 updateStatus();
                 updatePGN();
-                getBestMove();
+                
+                if (simulationActive) {
+                    // If simulation is active, now it's Stockfish's turn (Black)
+                    setTimeout(makeStockfishMove, 500);
+                } else {
+                    getBestMove();
+                }
+            }
+        }
+
+        function toggleSimulation() {
+            if (simulationActive) {
+                simulationActive = false;
+                $('#sim-btn').text("START SIMULATION").css('background', '#ff3333');
+                $('#sim-status').text("Simulation stopped.");
+                log("SYSTEM", "Simulation stopped.");
+            } else {
+                simulationActive = true;
+                $('#sim-btn').text("STOP SIMULATION").css('background', '#555');
+                $('#sim-status').text("Simulation running...");
+                log("SYSTEM", "Simulation started vs Stockfish ELO " + $('#stockfish-elo').val());
+                
+                // If it's White's turn (Anti-Stockfish), trigger move
+                if (game.turn() === 'w') {
+                    getBestMove(); // This will trigger makeEngineMove when done
+                } else {
+                    makeStockfishMove();
+                }
+            }
+        }
+
+        function makeStockfishMove() {
+            if (!simulationActive || game.game_over()) return;
+
+            const elo = $('#stockfish-elo').val();
+            $('#sim-status').text(`Stockfish (${elo}) thinking...`);
+
+            $.ajax({
+                url: '/api/stockfish',
+                type: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({ 
+                    fen: game.fen(),
+                    elo: elo
+                }),
+                success: function(response) {
+                    if (response.best_move) {
+                        game.move(response.best_move, {sloppy: true});
+                        board.position(game.fen());
+                        saveGameState();
+                        updateStatus();
+                        updatePGN();
+                        log("STOCKFISH", `Played ${response.best_move} (ELO ${elo})`);
+                        
+                        if (!game.game_over()) {
+                            // Now Anti-Stockfish's turn
+                            getBestMove();
+                        } else {
+                            simulationActive = false;
+                            $('#sim-btn').text("START SIMULATION").css('background', '#ff3333');
+                            checkWinCondition(elo);
+                        }
+                    }
+                }
+            });
+        }
+
+        function checkWinCondition(elo) {
+            if (game.in_checkmate() && game.turn() === 'b') {
+                // White (Anti-Stockfish) won!
+                const version = $('#confidence').text().replace('Version ', '');
+                const winMsg = `Anti-Stockfish ${version} BEAT Stockfish ${elo}!`;
+                log("VICTORY", winMsg);
+                alert(winMsg);
+                
+                // Update header
+                $('h1').text(`ANTI-STOCKFISH (BEAT ELO ${elo})`);
+                $('h1').css('color', '#39ff14');
             }
         }
 
