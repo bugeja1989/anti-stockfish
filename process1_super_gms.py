@@ -260,7 +260,7 @@ class SuperGMsCollector:
                 
                 if games > 0:
                     logger.info(f"✅ Progress: {idx + 1}/{len(self.SUPER_GMS)} complete")
-                    logger.info(f"📊 Total positions: {self.state['total_positions']:,}\n")
+                    logger.info(f"📊 Total games collected: {self.state['total_positions']:,}\n")
                 else:
                     logger.warning(f"⏭️  Skipping {player}\n")
                 
@@ -272,7 +272,7 @@ class SuperGMsCollector:
             logger.info(f"\n{'='*80}")
             logger.info(f"🎉 ALL {len(self.SUPER_GMS)} SUPER GMS COMPLETE!")
             logger.info(f"{'='*80}\n")
-            logger.info(f"✅ Total positions: {self.state['total_positions']:,}\n")
+            logger.info(f"✅ Total games collected: {self.state['total_positions']:,}\n")
         
         except KeyboardInterrupt:
             logger.info(f"\n⏹️  Stopped by user")

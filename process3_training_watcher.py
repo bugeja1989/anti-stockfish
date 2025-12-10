@@ -354,6 +354,7 @@ class SmartTrainingWatcher:
         try:
             while True:
                 logger.info(f"👁️  Checking for new games...")
+                logger.info(f"📊 Current status: {self.state['total_positions_extracted']:,} positions extracted, {self.state['models_trained']} models trained")
                 
                 if self.check_for_new_games():
                     logger.info(f"🎉 New games found! Extracting positions...")
@@ -362,12 +363,19 @@ class SmartTrainingWatcher:
                     
                     if new_positions > 0:
                         self.save_state()
-                        logger.info(f"🎉 Extracted {new_positions:,} new positions! Starting training...")
+                        logger.info(f"\n{'='*80}")
+                        logger.info(f"🎉 EXTRACTION COMPLETE")
+                        logger.info(f"{'='*80}")
+                        logger.info(f"📊 New positions: {new_positions:,}")
+                        logger.info(f"📊 Total positions: {self.state['total_positions_extracted']:,}")
+                        logger.info(f"📊 Models trained: {self.state['models_trained']}")
+                        logger.info(f"{'='*80}\n")
+                        logger.info(f"🧠 Starting training...")
                         self.train_model()
                     else:
                         logger.warning(f"⚠️  No positions extracted from new games")
                 else:
-                    logger.info(f"💤 No new games, waiting {CHECK_INTERVAL}s...")
+                    logger.info(f"💤 No new games, waiting {CHECK_INTERVAL}s...\n")
                 
                 time.sleep(CHECK_INTERVAL)
         
