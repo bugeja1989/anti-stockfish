@@ -318,7 +318,7 @@
                     if (response.best_move) {
                         $('#best-move').text(response.best_move);
                         $('#confidence').text('Version ' + response.model_version);
-                        log("ENGINE", `Suggests ${response.best_move} (v${response.model_version})`);
+                        log("ENGINE", `Suggests ${response.best_move} (${response.model_version})`);
                         
                         // Highlight move
                         // TODO: Add board highlighting
