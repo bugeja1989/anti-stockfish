@@ -163,7 +163,7 @@ class ContinuousTrainer:
             return 0
         
         # Limit batch size to allow training to happen more often
-        BATCH_LIMIT = 10
+        BATCH_LIMIT = 5000  # Process max 5000 games per cycle to catch up with collector
         entries_to_process = min(new_entries, BATCH_LIMIT)
         
         logger.info(f"📊 Processing {entries_to_process} new entries (Batch limit: {BATCH_LIMIT})...")
@@ -240,8 +240,8 @@ class ContinuousTrainer:
             logger.info(f"🔥 GPU: {'MPS (Metal)' if GPU_AVAILABLE else 'CPU'}")
             logger.info(f"📦 Batch size: {BATCH_SIZE}")
             
-            # Increase epochs as we get more data
-            epochs = min(10 + (self.state['models_trained'] * 2), 30)
+            # Fixed epochs as requested
+            epochs = 6
             
             cmd = [
                 "python3", "neural_network/src/train.py",
