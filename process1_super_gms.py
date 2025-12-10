@@ -168,10 +168,15 @@ class SuperGMsCollector:
         """Collect games from Chess.com"""
         logger.info(f"📥 Collecting {max_games} games from {username} (Chess.com)...")
         
+        # Chess.com requires User-Agent header
+        headers = {
+            'User-Agent': 'Anti-Stockfish Chess Bot (https://github.com/bugeja1989/anti-stockfish)'
+        }
+        
         try:
             # Get player's archives
             archives_url = f"https://api.chess.com/pub/player/{username}/games/archives"
-            response = requests.get(archives_url, timeout=30)
+            response = requests.get(archives_url, headers=headers, timeout=30)
             
             if response.status_code == 404:
                 logger.warning(f"  ⚠️  {username}: User not found on Chess.com")
@@ -195,7 +200,7 @@ class SuperGMsCollector:
                 time.sleep(2)  # Rate limiting
                 
                 try:
-                    archive_response = requests.get(archive_url, timeout=30)
+                    archive_response = requests.get(archive_url, headers=headers, timeout=30)
                     archive_response.raise_for_status()
                     
                     games = archive_response.json().get('games', [])
