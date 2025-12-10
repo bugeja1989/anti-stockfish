@@ -324,10 +324,10 @@ class ContinuousTrainer:
                 try:
                     # Import model class dynamically to avoid circular imports
                     sys.path.append('neural_network/src')
-                    from model import ChessNet
+                    from model import ChaosModule
                     
                     device = "mps" if torch.backends.mps.is_available() else "cpu"
-                    self.latest_model = ChessNet().to(device)
+                    self.latest_model = ChaosModule().to(device)
                     self.latest_model.load_state_dict(torch.load(model_path, map_location=device))
                     self.latest_model.eval()
                     logger.info(f"🧠 Loaded model: {model_path}")
