@@ -6,6 +6,7 @@ Anti-Stockfish: Optimized Training Script for Apple M4 Pro
 - Streaming Dataset (IterableDataset) for low memory usage
 - Large batch sizes (1024+) for max throughput
 - Optimized for Apple Silicon
+- Supports Checkpointing & Resuming
 """
 
 import torch
@@ -18,6 +19,7 @@ import argparse
 from pathlib import Path
 import sys
 import itertools
+import os
 
 # Import the model
 sys.path.append(str(Path(__file__).parent))
@@ -111,6 +113,7 @@ def main():
     parser.add_argument('--batch-size', type=int, default=1024, help='Batch size')
     parser.add_argument('--device', default='mps', help='Device (mps, cuda, cpu)')
     parser.add_argument('--num-workers', type=int, default=4, help='DataLoader workers')
+    parser.add_argument('--resume', action='store_true', help='Resume from latest checkpoint if available')
     args = parser.parse_args()
     
     # Device setup
@@ -158,12 +161,32 @@ def main():
     optimizer_chaos = optim.Adam(chaos_model.parameters(), lr=0.001)
     optimizer_sac = optim.Adam(sacrifice_model.parameters(), lr=0.001)
     
+    # Checkpoint directory
+    model_dir = Path("neural_network/models")
+    model_dir.mkdir(parents=True, exist_ok=True)
+    chaos_path = model_dir / "chaos_module.pth"
+    sac_path = model_dir / "sacrifice_module.pth"
+    
+    # Resume logic
+    start_epoch = 0
+    if args.resume:
+        if chaos_path.exists() and sac_path.exists():
+            logger.info("🔄 Found existing models. Resuming training...")
+            try:
+                chaos_model.load_state_dict(torch.load(chaos_path, map_location=device))
+                sacrifice_model.load_state_dict(torch.load(sac_path, map_location=device))
+                logger.info("✅ Models loaded successfully!")
+            except Exception as e:
+                logger.error(f"⚠️ Failed to load models: {e}. Starting from scratch.")
+        else:
+            logger.info("ℹ️  No existing models found. Starting fresh.")
+    
     logger.info(f"\n{'='*80}")
     logger.info(f"🧠 TRAINING STARTED (STREAMING MODE)")
     logger.info(f"{'='*80}\n")
     
     # Training loop
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         logger.info(f"Epoch {epoch + 1}/{args.epochs}")
         
         avg_loss = train_epoch(
@@ -176,19 +199,16 @@ def main():
             total_batches
         )
         
-        logger.info(f"✅ Epoch {epoch + 1} complete! Avg Loss: {avg_loss:.4f}\n")
-    
-    # Save models
-    model_dir = Path("neural_network/models")
-    model_dir.mkdir(parents=True, exist_ok=True)
-    
-    torch.save(chaos_model.state_dict(), model_dir / "chaos_module.pth")
-    torch.save(sacrifice_model.state_dict(), model_dir / "sacrifice_module.pth")
+        logger.info(f"✅ Epoch {epoch + 1} complete! Avg Loss: {avg_loss:.4f}")
+        
+        # Save checkpoint after EVERY epoch
+        torch.save(chaos_model.state_dict(), chaos_path)
+        torch.save(sacrifice_model.state_dict(), sac_path)
+        logger.info(f"💾 Checkpoint saved to {model_dir}\n")
     
     logger.info(f"\n{'='*80}")
     logger.info(f"✅ TRAINING COMPLETE!")
     logger.info(f"{'='*80}\n")
-    logger.info(f"💾 Models saved to {model_dir}")
 
 if __name__ == '__main__':
     main()

@@ -245,7 +245,8 @@ class ContinuousTrainer:
                 "--epochs", str(epochs),
                 "--batch-size", str(BATCH_SIZE),
                 "--device", device,
-                "--num-workers", "8"
+                "--num-workers", "8",
+                "--resume"
             ]
             
             logger.info(f"🚀 Executing: {' '.join(cmd)}")

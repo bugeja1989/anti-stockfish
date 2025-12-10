@@ -25,30 +25,37 @@ check_dependency() {
     fi
 }
 
-# CLEANUP: Kill existing processes and free port 5000
+# CLEANUP: Aggressively kill existing processes
 echo "🧹 Cleaning up previous runs..."
 
-# Kill by PID files if they exist
+# 1. Kill by PID files if they exist
 if [ -f process1.pid ]; then
-    kill $(cat process1.pid) 2>/dev/null
+    kill -9 $(cat process1.pid) 2>/dev/null
     rm process1.pid
 fi
 if [ -f process2.pid ]; then
-    kill $(cat process2.pid) 2>/dev/null
+    kill -9 $(cat process2.pid) 2>/dev/null
     rm process2.pid
 fi
 
-# Kill by process name (just in case)
-pkill -f "process1_chesscom_collector.py"
-pkill -f "process2_training_watcher.py"
+# 2. Kill by process name (Main Scripts)
+pkill -9 -f "process1_chesscom_collector.py"
+pkill -9 -f "process2_training_watcher.py"
+pkill -9 -f "neural_network/src/train.py"
 
-# Free port 5443 (macOS/Linux)
+# 3. Kill multiprocessing workers (Aggressive)
+# This finds any python process that is a child of the above or related to multiprocessing
+# We look for "multiprocessing.spawn" or "resource_tracker" which are common in PyTorch DataLoader
+pkill -9 -f "multiprocessing.spawn"
+pkill -9 -f "multiprocessing.resource_tracker"
+
+# 4. Free port 5443 (macOS/Linux)
 echo "🔓 Freeing port 5443..."
 lsof -ti:5443 | xargs kill -9 2>/dev/null
 
-# Wait for cleanup
-sleep 2
-echo "✅ Cleanup complete!"
+# Wait for cleanup to actually happen
+sleep 3
+echo "✅ Cleanup complete! All old processes should be dead."
 echo ""
 
 echo "🔍 Checking dependencies..."
@@ -81,10 +88,10 @@ echo "║                                                                       
 echo "║  👉 OPEN GUI: http://localhost:5443                                          ║"
 echo "║                                                                               ║"
 echo "║  Monitor logs:                                                               ║"
-echo "║    tail -f process1_chesscom.log                                             ║"
-echo "║    tail -f process2_training.log                                             ║"
-echo "║                                                                               ║"
-echo "║  Stop all:                                                                   ║"
-echo "║    kill \$(cat process1.pid) \$(cat process2.pid)                                ║"
-echo "║                                                                               ║"
-echo "╚═══════════════════════════════════════════════════════════════════════════════╝"
+84	echo "║    tail -f process1_chesscom.log                                             ║"
+85	echo "║    tail -f process2_training.log                                             ║"
+86	echo "║                                                                               ║"
+87	echo "║  Stop all:                                                                   ║"
+88	echo "║    kill \$(cat process1.pid) \$(cat process2.pid)                                ║"
+89	echo "║                                                                               ║"
+90	echo "╚═══════════════════════════════════════════════════════════════════════════════╝"
