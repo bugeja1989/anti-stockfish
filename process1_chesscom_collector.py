@@ -38,6 +38,11 @@ class MegaChessComCollector:
         self.REQUEST_DELAY = 0.3  # 300ms between requests
         self.last_request_time = 0
         
+        # Chess.com requires a User-Agent with contact info
+        self.headers = {
+            'User-Agent': 'Anti-Stockfish-Collector/1.0 (contact: anti-stockfish@example.com)'
+        }
+        
         self.load_state()
     
     def load_state(self):
@@ -88,7 +93,7 @@ class MegaChessComCollector:
         
         for attempt in range(retries):
             try:
-                response = requests.get(url, timeout=15)
+                response = requests.get(url, headers=self.headers, timeout=15)
                 if response.status_code == 200:
                     return response.json()
                 elif response.status_code == 429:
@@ -96,8 +101,10 @@ class MegaChessComCollector:
                     logger.warning(f"⚠️  Rate limited, waiting {wait}s...")
                     time.sleep(wait)
                 else:
+                    logger.warning(f"⚠️  Request failed: {url} -> {response.status_code}")
                     return None
             except Exception as e:
+                logger.error(f"❌ Request error: {e}")
                 if attempt < retries - 1:
                     time.sleep(2 ** attempt)
         return None
