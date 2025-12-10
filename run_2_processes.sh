@@ -7,7 +7,7 @@ echo "║                                                                       
 echo "║  Optimized for: Apple M4 Pro (14 cores, 24GB RAM, Metal GPU)                ║"
 echo "║                                                                               ║"
 echo "║  Process 1: Chess.com Collector (Target: 100M+ Positions)                   ║"
-echo "║  Process 2: Continuous Trainer + Cyberpunk GUI (localhost:5000)             ║"
+echo "║  Process 2: Continuous Trainer + Cyberpunk GUI (localhost:5443)             ║"
 echo "║                                                                               ║"
 echo "╚═══════════════════════════════════════════════════════════════════════════════╝"
 echo ""
@@ -42,9 +42,9 @@ fi
 pkill -f "process1_chesscom_collector.py"
 pkill -f "process2_training_watcher.py"
 
-# Free port 5000 (macOS/Linux)
-echo "🔓 Freeing port 5000..."
-lsof -ti:5000 | xargs kill -9 2>/dev/null
+# Free port 5443 (macOS/Linux)
+echo "🔓 Freeing port 5443..."
+lsof -ti:5443 | xargs kill -9 2>/dev/null
 
 # Wait for cleanup
 sleep 2
@@ -78,7 +78,7 @@ echo "╔═══════════════════════�
 echo "║                                                                               ║"
 echo "║  ✅ ALL PROCESSES STARTED!                                                   ║"
 echo "║                                                                               ║"
-echo "║  👉 OPEN GUI: http://localhost:5000                                          ║"
+echo "║  👉 OPEN GUI: http://localhost:5443                                          ║"
 echo "║                                                                               ║"
 echo "║  Monitor logs:                                                               ║"
 echo "║    tail -f process1_chesscom.log                                             ║"

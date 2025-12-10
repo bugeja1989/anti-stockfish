@@ -315,8 +315,8 @@ def api_stats():
 
 def run_api_server():
     """Run Flask API server"""
-    logger.info("🌐 Starting GUI on http://localhost:5000")
-    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+    logger.info("🌐 Starting GUI on http://localhost:5443")
+    app.run(host='0.0.0.0', port=5443, debug=False, use_reloader=False)
 
 def main():
     global trainer
