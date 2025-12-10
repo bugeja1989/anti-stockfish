@@ -158,17 +158,26 @@ class ContinuousTrainer:
         if new_entries <= 0:
             return 0
         
-        logger.info(f"📊 Processing {new_entries} new entries...")
+        # Limit batch size to allow training to happen more often
+        BATCH_LIMIT = 50
+        entries_to_process = min(new_entries, BATCH_LIMIT)
+        
+        logger.info(f"📊 Processing {entries_to_process} new entries (Batch limit: {BATCH_LIMIT})...")
         
         total_new = 0
+        processed_count = 0
         
         with open(self.chesscom_dataset) as f:
             # Skip processed
             for _ in range(self.state['last_chesscom_entries']):
                 next(f)
             
-            # Process new
+            # Process new (up to limit)
             for line in f:
+                if processed_count >= BATCH_LIMIT:
+                    break
+                
+                processed_count += 1
                 try:
                     entry = json.loads(line)
                     games = entry.get('games', [])
@@ -191,7 +200,7 @@ class ContinuousTrainer:
                 except Exception as e:
                     continue
         
-        self.state['last_chesscom_entries'] = entries
+        self.state['last_chesscom_entries'] += processed_count
         # Note: total_positions_extracted is already updated incrementally in the loop
         self.save_state()
         
