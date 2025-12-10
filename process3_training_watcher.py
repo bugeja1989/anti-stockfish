@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
 """
-Anti-Stockfish Process 3: Continuous Training Watcher
-Monitors data from Process 1 & 2, trains when new data arrives
+Anti-Stockfish Process 3: Smart Training Watcher
+1. Monitors Process 1 & 2 for new games
+2. Extracts positions from games (Chess.com & Lichess formats)
+3. Trains on extracted positions
 """
 
 import subprocess
@@ -11,6 +13,9 @@ import logging
 from pathlib import Path
 import json
 import torch
+import chess
+import chess.pgn
+import io
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,8 +27,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class TrainingWatcher:
-    """Watches for new data and trains continuously"""
+class SmartTrainingWatcher:
+    """Watches for new games, extracts positions, trains"""
     
     def __init__(self):
         self.data_dir = Path("neural_network/data")
@@ -34,7 +39,7 @@ class TrainingWatcher:
         
         self.super_gms_dataset = self.data_dir / "super_gms_dataset.jsonl"
         self.top_1000_dataset = self.data_dir / "top_1000_dataset.jsonl"
-        self.master_dataset = self.data_dir / "master_dataset.jsonl"
+        self.positions_dataset = self.data_dir / "extracted_positions.jsonl"
         
         self.state_file = Path("process3_state.json")
         
@@ -42,7 +47,7 @@ class TrainingWatcher:
         self.GPU_AVAILABLE = torch.backends.mps.is_available()
         self.BATCH_SIZE = 256 if self.GPU_AVAILABLE else 64
         
-        logger.info(f"🖥️  GPU: {self.GPU_AVAILABLE}, Batch: {self.BATCH_SIZE}")
+        logger.info(f"🖥️  GPU: {'MPS (Metal)' if self.GPU_AVAILABLE else 'CPU'}, Batch: {self.BATCH_SIZE}")
         
         self.load_state()
     
@@ -51,12 +56,12 @@ class TrainingWatcher:
         if self.state_file.exists():
             with open(self.state_file) as f:
                 self.state = json.load(f)
-            logger.info(f"📊 Loaded: {self.state['models_trained']} models trained")
+            logger.info(f"📊 Loaded: {self.state['models_trained']} models trained, {self.state['total_positions_extracted']:,} positions extracted")
         else:
             self.state = {
-                'last_super_gms_size': 0,
-                'last_top_1000_size': 0,
-                'last_master_size': 0,
+                'last_super_gms_games': 0,
+                'last_top_1000_games': 0,
+                'total_positions_extracted': 0,
                 'models_trained': 0,
                 'last_training_time': None
             }
@@ -77,61 +82,221 @@ class TrainingWatcher:
         except:
             return 0
     
-    def merge_datasets(self):
-        """Merge all datasets into master"""
-        logger.info("📊 Merging datasets...")
+    def extract_positions_from_chesscom_game(self, game_data):
+        """Extract positions from Chess.com game format"""
+        positions = []
         
-        total_lines = 0
-        
-        with open(self.master_dataset, 'w') as master:
-            # Add Super GMs data
-            if self.super_gms_dataset.exists():
-                with open(self.super_gms_dataset) as f:
-                    for line in f:
-                        master.write(line)
-                        total_lines += 1
+        try:
+            # Chess.com format has 'pgn' field
+            pgn_text = game_data.get('pgn')
+            if not pgn_text:
+                return positions
             
-            # Add Top 1000 data
-            if self.top_1000_dataset.exists():
-                with open(self.top_1000_dataset) as f:
-                    for line in f:
-                        master.write(line)
-                        total_lines += 1
+            # Parse PGN
+            pgn = io.StringIO(pgn_text)
+            game = chess.pgn.read_game(pgn)
+            
+            if not game:
+                return positions
+            
+            # Get game outcome
+            result = game.headers.get('Result', '*')
+            if result == '1-0':
+                outcome = 1.0  # White wins
+            elif result == '0-1':
+                outcome = 0.0  # Black wins
+            else:
+                outcome = 0.5  # Draw
+            
+            # Extract positions from moves
+            board = game.board()
+            move_number = 0
+            
+            for move in game.mainline_moves():
+                # Get position before move
+                fen = board.fen()
+                
+                # Create position data
+                position = {
+                    'fen': fen,
+                    'move': move.uci(),
+                    'outcome': outcome,
+                    'move_number': move_number,
+                    'source': 'chesscom'
+                }
+                
+                positions.append(position)
+                
+                # Make the move
+                board.push(move)
+                move_number += 1
+            
+            return positions
         
-        logger.info(f"✅ Merged: {total_lines:,} total positions")
-        return total_lines
+        except Exception as e:
+            logger.debug(f"Error extracting Chess.com positions: {e}")
+            return positions
     
-    def check_for_new_data(self):
-        """Check if new data has arrived"""
-        super_gms_size = self.get_dataset_size(self.super_gms_dataset)
-        top_1000_size = self.get_dataset_size(self.top_1000_dataset)
+    def extract_positions_from_lichess_game(self, game_data):
+        """Extract positions from Lichess game format"""
+        positions = []
         
-        super_gms_new = super_gms_size > self.state['last_super_gms_size']
-        top_1000_new = top_1000_size > self.state['last_top_1000_size']
+        try:
+            # Lichess format has 'moves' field with UCI moves
+            moves_str = game_data.get('moves', '')
+            if not moves_str:
+                return positions
+            
+            # Get game outcome
+            winner = game_data.get('winner')
+            if winner == 'white':
+                outcome = 1.0
+            elif winner == 'black':
+                outcome = 0.0
+            else:
+                outcome = 0.5
+            
+            # Parse moves
+            moves = moves_str.split()
+            board = chess.Board()
+            move_number = 0
+            
+            for move_uci in moves:
+                try:
+                    # Get position before move
+                    fen = board.fen()
+                    
+                    # Create position data
+                    position = {
+                        'fen': fen,
+                        'move': move_uci,
+                        'outcome': outcome,
+                        'move_number': move_number,
+                        'source': 'lichess'
+                    }
+                    
+                    positions.append(position)
+                    
+                    # Make the move
+                    move = chess.Move.from_uci(move_uci)
+                    board.push(move)
+                    move_number += 1
+                
+                except:
+                    break
+            
+            return positions
+        
+        except Exception as e:
+            logger.debug(f"Error extracting Lichess positions: {e}")
+            return positions
+    
+    def extract_positions_from_games(self):
+        """Extract positions from all new games"""
+        logger.info(f"\n{'='*80}")
+        logger.info(f"🔍 EXTRACTING POSITIONS FROM GAMES")
+        logger.info(f"{'='*80}\n")
+        
+        total_new_positions = 0
+        
+        # Process Chess.com games
+        super_gms_games = self.get_dataset_size(self.super_gms_dataset)
+        new_super_gms_games = super_gms_games - self.state['last_super_gms_games']
+        
+        if new_super_gms_games > 0:
+            logger.info(f"📊 Processing {new_super_gms_games} new Chess.com games...")
+            
+            with open(self.super_gms_dataset) as f:
+                # Skip already processed games
+                for _ in range(self.state['last_super_gms_games']):
+                    next(f)
+                
+                # Process new games
+                for line in f:
+                    try:
+                        game_data = json.loads(line)
+                        positions = self.extract_positions_from_chesscom_game(game_data)
+                        
+                        # Save positions
+                        with open(self.positions_dataset, 'a') as pf:
+                            for pos in positions:
+                                pf.write(json.dumps(pos) + '\n')
+                                total_new_positions += 1
+                    
+                    except Exception as e:
+                        logger.debug(f"Error processing Chess.com game: {e}")
+                        continue
+            
+            logger.info(f"  ✅ Chess.com: {total_new_positions:,} positions extracted")
+            self.state['last_super_gms_games'] = super_gms_games
+        
+        # Process Lichess games
+        top_1000_games = self.get_dataset_size(self.top_1000_dataset)
+        new_top_1000_games = top_1000_games - self.state['last_top_1000_games']
+        
+        if new_top_1000_games > 0:
+            logger.info(f"📊 Processing {new_top_1000_games} new Lichess games...")
+            
+            lichess_positions = 0
+            
+            with open(self.top_1000_dataset) as f:
+                # Skip already processed games
+                for _ in range(self.state['last_top_1000_games']):
+                    next(f)
+                
+                # Process new games
+                for line in f:
+                    try:
+                        game_data = json.loads(line)
+                        positions = self.extract_positions_from_lichess_game(game_data)
+                        
+                        # Save positions
+                        with open(self.positions_dataset, 'a') as pf:
+                            for pos in positions:
+                                pf.write(json.dumps(pos) + '\n')
+                                lichess_positions += 1
+                                total_new_positions += 1
+                    
+                    except Exception as e:
+                        logger.debug(f"Error processing Lichess game: {e}")
+                        continue
+            
+            logger.info(f"  ✅ Lichess: {lichess_positions:,} positions extracted")
+            self.state['last_top_1000_games'] = top_1000_games
+        
+        self.state['total_positions_extracted'] += total_new_positions
+        
+        logger.info(f"\n📊 Total new positions: {total_new_positions:,}")
+        logger.info(f"📊 Total positions ever: {self.state['total_positions_extracted']:,}\n")
+        
+        return total_new_positions
+    
+    def check_for_new_games(self):
+        """Check if new games have arrived"""
+        super_gms_games = self.get_dataset_size(self.super_gms_dataset)
+        top_1000_games = self.get_dataset_size(self.top_1000_dataset)
+        
+        super_gms_new = super_gms_games > self.state['last_super_gms_games']
+        top_1000_new = top_1000_games > self.state['last_top_1000_games']
         
         if super_gms_new or top_1000_new:
-            logger.info(f"📥 New data detected!")
-            logger.info(f"   Super GMs: {self.state['last_super_gms_size']:,} → {super_gms_size:,}")
-            logger.info(f"   Top 1000: {self.state['last_top_1000_size']:,} → {top_1000_size:,}")
-            
-            self.state['last_super_gms_size'] = super_gms_size
-            self.state['last_top_1000_size'] = top_1000_size
-            
+            logger.info(f"📥 New games detected!")
+            logger.info(f"   Chess.com: {self.state['last_super_gms_games']} → {super_gms_games} games")
+            logger.info(f"   Lichess: {self.state['last_top_1000_games']} → {top_1000_games} games")
             return True
         
         return False
     
     def train_model(self):
-        """Train model with all available data"""
+        """Train model with extracted positions"""
         logger.info(f"\n{'='*80}")
         logger.info(f"🧠 TRAINING MODEL #{self.state['models_trained'] + 1}")
         logger.info(f"{'='*80}\n")
         
-        # Merge datasets
-        total_positions = self.merge_datasets()
+        total_positions = self.get_dataset_size(self.positions_dataset)
         
         if total_positions < 1000:
-            logger.warning(f"⚠️  Not enough data yet ({total_positions} positions)")
+            logger.warning(f"⚠️  Not enough positions yet ({total_positions})")
             return False
         
         logger.info(f"📊 Total positions: {total_positions:,}")
@@ -146,7 +311,7 @@ class TrainingWatcher:
             
             cmd = [
                 "python3", "neural_network/src/train.py",
-                "--data", str(self.master_dataset),
+                "--data", str(self.positions_dataset),
                 "--epochs", str(epochs),
                 "--batch-size", str(self.BATCH_SIZE),
                 "--device", device,
@@ -159,7 +324,6 @@ class TrainingWatcher:
                 logger.info(f"✅ Training complete!")
                 self.state['models_trained'] += 1
                 self.state['last_training_time'] = time.time()
-                self.state['last_master_size'] = total_positions
                 self.save_state()
                 return True
             else:
@@ -171,17 +335,17 @@ class TrainingWatcher:
             return False
     
     def run(self):
-        """Main loop: Watch for data, train when available"""
+        """Main loop: Watch for games, extract positions, train"""
         logger.info(f"\n{'='*80}")
-        logger.info(f"👁️  PROCESS 3: CONTINUOUS TRAINING WATCHER")
+        logger.info(f"👁️  PROCESS 3: SMART TRAINING WATCHER")
         logger.info(f"{'='*80}\n")
         logger.info(f"🖥️  Hardware: Apple M4 Pro")
         logger.info(f"🚀 GPU: {'Metal (MPS)' if self.GPU_AVAILABLE else 'CPU only'}")
         logger.info(f"📊 Batch Size: {self.BATCH_SIZE}\n")
         logger.info(f"📋 Strategy:")
-        logger.info(f"   1. Watch Process 1 (Super GMs from Chess.com)")
-        logger.info(f"   2. Watch Process 2 (Top 1000 from Lichess)")
-        logger.info(f"   3. Train when new data arrives")
+        logger.info(f"   1. Watch Process 1 & 2 for new games")
+        logger.info(f"   2. Extract positions from games (Chess.com & Lichess)")
+        logger.info(f"   3. Train on extracted positions")
         logger.info(f"   4. Repeat forever\n")
         logger.info(f"🎯 Model gets smarter continuously!\n")
         
@@ -189,23 +353,32 @@ class TrainingWatcher:
         
         try:
             while True:
-                logger.info(f"👁️  Checking for new data...")
+                logger.info(f"👁️  Checking for new games...")
                 
-                if self.check_for_new_data():
-                    logger.info(f"🎉 New data found! Starting training...")
-                    self.train_model()
+                if self.check_for_new_games():
+                    logger.info(f"🎉 New games found! Extracting positions...")
+                    
+                    new_positions = self.extract_positions_from_games()
+                    
+                    if new_positions > 0:
+                        self.save_state()
+                        logger.info(f"🎉 Extracted {new_positions:,} new positions! Starting training...")
+                        self.train_model()
+                    else:
+                        logger.warning(f"⚠️  No positions extracted from new games")
                 else:
-                    logger.info(f"💤 No new data, waiting {CHECK_INTERVAL}s...")
+                    logger.info(f"💤 No new games, waiting {CHECK_INTERVAL}s...")
                 
                 time.sleep(CHECK_INTERVAL)
         
         except KeyboardInterrupt:
             logger.info(f"\n⏹️  Stopped by user")
             logger.info(f"📊 Models trained: {self.state['models_trained']}")
+            logger.info(f"📊 Positions extracted: {self.state['total_positions_extracted']:,}")
             self.save_state()
 
 def main():
-    watcher = TrainingWatcher()
+    watcher = SmartTrainingWatcher()
     watcher.run()
 
 if __name__ == '__main__':
