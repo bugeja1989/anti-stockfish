@@ -55,19 +55,33 @@ class ContinuousTrainer:
         self.load_state()
     
     def load_state(self):
-        """Load state"""
+        """Load state with migration support"""
+        default_state = {
+            'last_chesscom_entries': 0,
+            'total_positions_extracted': 0,
+            'models_trained': 0,
+            'last_training_time': None,
+            'training_active': False
+        }
+        
         if self.state_file.exists():
-            with open(self.state_file) as f:
-                self.state = json.load(f)
-            logger.info(f"📊 Loaded: {self.state['models_trained']} models, {self.state['total_positions_extracted']:,} positions")
+            try:
+                with open(self.state_file) as f:
+                    loaded_state = json.load(f)
+                
+                # Merge loaded state with default state to ensure all keys exist
+                self.state = {**default_state, **loaded_state}
+                
+                # Ensure numeric values are valid
+                self.state['models_trained'] = int(self.state.get('models_trained', 0))
+                self.state['total_positions_extracted'] = int(self.state.get('total_positions_extracted', 0))
+                
+                logger.info(f"📊 Loaded: {self.state['models_trained']} models, {self.state['total_positions_extracted']:,} positions")
+            except Exception as e:
+                logger.warning(f"⚠️  State file corrupted or incompatible ({e}), starting fresh")
+                self.state = default_state
         else:
-            self.state = {
-                'last_chesscom_entries': 0,
-                'total_positions_extracted': 0,
-                'models_trained': 0,
-                'last_training_time': None,
-                'training_active': False
-            }
+            self.state = default_state
             logger.info("🆕 Starting fresh")
     
     def save_state(self):
