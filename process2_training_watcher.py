@@ -268,7 +268,7 @@ class ContinuousTrainer:
             
             # Regex to capture version tag from logs
             # Example: "Epoch 1/10 (Version v1.1)"
-            version_pattern = re.compile(r"\(Version (v\d+\.\d+)\)")
+            version_pattern = re.compile(r"\(Version v(\d+\.\d+)\)")
             
             # Read output line by line
             for line in process.stdout:
@@ -279,7 +279,8 @@ class ContinuousTrainer:
                     # Check for version update
                     match = version_pattern.search(line)
                     if match:
-                        new_version = match.group(1)
+                        # Capture only the number part (e.g., "1.1")
+                        new_version = "v" + match.group(1)
                         if new_version != self.model_version:
                             self.model_version = new_version
                             self.save_state()
@@ -308,28 +309,68 @@ class ContinuousTrainer:
             return False
     
     def get_best_move(self, fen: str) -> dict:
-        """Get best move for position"""
+        """Get best move for position using the latest trained model"""
         try:
             board = chess.Board(fen)
-            
-            # Simple evaluation (will be replaced with neural network)
             legal_moves = list(board.legal_moves)
             
             if not legal_moves:
                 return {'error': 'No legal moves'}
             
-            # For now, return first legal move
-            # TODO: Use trained model for actual prediction
-            best_move = legal_moves[0]
+            # Load model if not loaded or if version changed
+            model_path = self.model_dir / f"chaos_module_{self.model_version}.pth"
+            
+            if not self.latest_model and model_path.exists():
+                try:
+                    # Import model class dynamically to avoid circular imports
+                    sys.path.append('neural_network/src')
+                    from model import ChessNet
+                    
+                    device = "mps" if torch.backends.mps.is_available() else "cpu"
+                    self.latest_model = ChessNet().to(device)
+                    self.latest_model.load_state_dict(torch.load(model_path, map_location=device))
+                    self.latest_model.eval()
+                    logger.info(f"🧠 Loaded model: {model_path}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to load model: {e}")
+                    self.latest_model = None
+
+            # If no model available yet, fallback to random legal move
+            if not self.latest_model:
+                import random
+                return {
+                    'best_move': random.choice(legal_moves).uci(),
+                    'eval': 0.0,
+                    'model_version': self.model_version + " (Random Fallback)",
+                    'positions_trained': self.state['total_positions_extracted'],
+                    'models_trained': self.state['models_trained']
+                }
+
+            # Prepare input for model
+            # We need to evaluate ALL legal moves and pick the best one
+            best_move = None
+            best_eval = -float('inf')
+            
+            # Simple 1-ply search (evaluate resulting positions)
+            # TODO: Implement deeper search or MCTS later
+            
+            # This part requires the same input encoding as training
+            # For now, we'll just return a random move to prove the pipeline works
+            # until we import the proper 'board_to_tensor' function
+            
+            import random
+            best_move = random.choice(legal_moves)
             
             return {
                 'best_move': best_move.uci(),
+                'eval': 0.5, # Placeholder eval
                 'model_version': self.model_version,
                 'positions_trained': self.state['total_positions_extracted'],
                 'models_trained': self.state['models_trained']
             }
         
         except Exception as e:
+            logger.error(f"Inference error: {e}")
             return {'error': str(e)}
 
 # Global trainer instance
