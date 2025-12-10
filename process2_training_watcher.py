@@ -339,12 +339,12 @@ trainer = ContinuousTrainer()
 def index():
     return render_template('index.html')
 
-@app.route('/api/status')
-def get_status():
+@app.route('/api/stats')
+def get_stats():
     return jsonify({
         'models_trained': trainer.state['models_trained'],
-        'positions_learned': trainer.state['total_positions_extracted'],
-        'current_version': trainer.model_version,
+        'positions_extracted': trainer.state['total_positions_extracted'],
+        'model_version': trainer.model_version,
         'gpu_status': 'METAL ACTIVE' if torch.backends.mps.is_available() else 'CPU ONLY',
         'training_active': trainer.state['training_active']
     })
