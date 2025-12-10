@@ -102,7 +102,7 @@ def train_epoch(chaos_model, sacrifice_model, dataloader, optimizer_chaos, optim
         if (batch_idx + 1) % 100 == 0:
             avg_loss = total_loss / num_batches
             percent = ((batch_idx + 1) / total_batches) * 100
-            logger.info(f"  Batch {batch_idx + 1}/{total_batches} ({percent:.1f}%) | Loss: {avg_loss:.4f}")
+            logger.info(f"  Batch {batch_idx + 1}/{total_batches} ({percent:.1f}%) | Loss: {avg_loss:.8f}")
     
     return total_loss / max(1, num_batches)
 
@@ -199,7 +199,7 @@ def main():
             total_batches
         )
         
-        logger.info(f"✅ Epoch {epoch + 1} complete! Avg Loss: {avg_loss:.4f}")
+        logger.info(f"✅ Epoch {epoch + 1} complete! Avg Loss: {avg_loss:.8f}")
         
         # Save checkpoint after EVERY epoch
         torch.save(chaos_model.state_dict(), chaos_path)
