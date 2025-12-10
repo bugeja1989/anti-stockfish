@@ -1,0 +1,6 @@
+flask
+torch
+chess
+requests
+numpy
+python-dotenv
