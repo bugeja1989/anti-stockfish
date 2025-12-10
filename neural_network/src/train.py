@@ -136,7 +136,7 @@ def train_epoch(chaos_model, sacrifice_model, dataloader, optimizer_chaos, optim
             else:
                 percent_str = f"{percent:.1f}%"
                 
-            logger.info(f"  Batch {batch_idx + 1}/{total_batches} ({percent_str}) | Loss: {avg_loss:.8f}")
+            logger.info(f"  Batch {batch_idx + 1}/{total_batches} ({percent_str}) | Loss: {avg_loss:.32f}")
     
     return total_loss / max(1, num_batches)
 
@@ -241,7 +241,7 @@ def main():
             total_batches
         )
         
-        logger.info(f"✅ Epoch {current_epoch} complete! Avg Loss: {avg_loss:.8f}")
+        logger.info(f"✅ Epoch {current_epoch} complete! Avg Loss: {avg_loss:.32f}")
         
         # 1. Save "Latest" for resuming
         torch.save(chaos_model.state_dict(), chaos_path_latest)
