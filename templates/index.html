@@ -360,12 +360,8 @@
                         }
                     }
                 },
-                error: function() {
-                    $('#confidence').text('Connection Failed');
-                    $('#best-move').text('ERR');
-                }
-            });
-        }           log("ERROR", "Engine analysis failed: " + error);
+                error: function(xhr, status, error) {
+                    log("ERROR", "Engine analysis failed: " + error);
                     $('#best-move').text('ERR');
                     $('#confidence').text('Connection Failed');
                 }
