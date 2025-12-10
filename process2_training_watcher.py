@@ -201,10 +201,12 @@ class ContinuousTrainer:
                     continue
         
         self.state['last_chesscom_entries'] += processed_count
-        # Note: total_positions_extracted is already updated incrementally in the loop
+        # Sync total positions with actual file size
+        real_total = self.get_dataset_size(self.positions_dataset)
+        self.state['total_positions_extracted'] = real_total
         self.save_state()
         
-        logger.info(f"✅ Extracted {total_new:,} new positions (Total: {self.state['total_positions_extracted']:,})")
+        logger.info(f"✅ Extracted {total_new:,} new positions (Total: {real_total:,})")
         
         return total_new
     
@@ -247,21 +249,37 @@ class ContinuousTrainer:
             
             logger.info(f"🚀 Executing: {' '.join(cmd)}")
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+            # Stream output in real-time
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True
+            )
             
-            if result.returncode == 0:
+            # Read output line by line
+            for line in process.stdout:
+                line = line.strip()
+                if line:
+                    logger.info(f"   🔥 {line}")
+            
+            process.wait()
+            
+            if process.returncode == 0:
                 logger.info(f"✅ Training complete!")
                 self.state['models_trained'] += 1
                 self.state['last_training_time'] = time.time()
                 self.model_version = self.state['models_trained']
                 self.save_state()
             else:
-                logger.error(f"❌ Training failed: {result.stderr[:500]}")
+                logger.error(f"❌ Training failed with code {process.returncode}")
             
             self.state['training_active'] = False
             self.save_state()
             
-            return result.returncode == 0
+            return process.returncode == 0
         
         except Exception as e:
             logger.error(f"❌ Training failed: {e}")
