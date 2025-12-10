@@ -59,7 +59,7 @@ class StreamingChessDataset(IterableDataset):
                 except:
                     continue
 
-def train_epoch(chaos_model, sacrifice_model, dataloader, optimizer_chaos, optimizer_sac, device):
+def train_epoch(chaos_model, sacrifice_model, dataloader, optimizer_chaos, optimizer_sac, device, total_batches):
     """Train for one epoch."""
     chaos_model.train()
     sacrifice_model.train()
@@ -99,7 +99,8 @@ def train_epoch(chaos_model, sacrifice_model, dataloader, optimizer_chaos, optim
         
         if (batch_idx + 1) % 100 == 0:
             avg_loss = total_loss / num_batches
-            logger.info(f"  Batch {batch_idx + 1} | Loss: {avg_loss:.4f}")
+            percent = ((batch_idx + 1) / total_batches) * 100
+            logger.info(f"  Batch {batch_idx + 1}/{total_batches} ({percent:.1f}%) | Loss: {avg_loss:.4f}")
     
     return total_loss / max(1, num_batches)
 
@@ -129,6 +130,19 @@ def main():
     
     # Load dataset (Streaming)
     dataset = StreamingChessDataset(args.data)
+    
+    # Calculate total batches (approximate based on file line count)
+    total_lines = 0
+    try:
+        with open(args.data) as f:
+            for _ in f: total_lines += 1
+    except:
+        total_lines = 1000000 # Fallback
+        
+    total_batches = total_lines // args.batch_size
+    logger.info(f"📊 Total positions: {total_lines:,}")
+    logger.info(f"📦 Total batches per epoch: {total_batches:,}")
+
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -158,7 +172,8 @@ def main():
             dataloader,
             optimizer_chaos,
             optimizer_sac,
-            device
+            device,
+            total_batches
         )
         
         logger.info(f"✅ Epoch {epoch + 1} complete! Avg Loss: {avg_loss:.4f}\n")
