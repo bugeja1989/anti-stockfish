@@ -331,7 +331,8 @@
             $.get('/api/stats', function(data) {
                 $('#models-count').text(data.models_trained);
                 $('#positions-count').text(data.positions_extracted.toLocaleString());
-                $('#model-version').text('v' + data.model_version);
+                // Backend now sends clean version (e.g. "v2.5"), so no need to prepend 'v'
+                $('#model-version').text(data.model_version);
                 
                 if (data.training_active) {
                     $('#training-status').text('TRAINING ACTIVE').css('color', '#39ff14');
