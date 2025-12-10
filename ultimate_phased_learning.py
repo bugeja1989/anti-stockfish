@@ -52,9 +52,9 @@ class UltimatePhasedLearning:
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self.historical_dir.mkdir(parents=True, exist_ok=True)
         
-        # Hardware optimization
+        # Hardware optimization (with Lichess rate limiting)
         self.CPU_CORES = mp.cpu_count()  # All 14 cores
-        self.MAX_WORKERS = min(self.CPU_CORES, 12)  # Leave 2 cores for system
+        self.MAX_WORKERS = 3  # Reduced to avoid rate limiting (Lichess allows ~15 req/min)
         self.GPU_AVAILABLE = torch.backends.mps.is_available()  # M4 Pro Metal
         self.BATCH_SIZE = 256 if self.GPU_AVAILABLE else 64  # Large batches with 24GB RAM
         
@@ -239,7 +239,7 @@ class UltimatePhasedLearning:
                     else:
                         logger.info(f"  [{idx}/{len(players)}] ⏭️  {player}: No games")
                     
-                    time.sleep(0.5)  # Rate limiting
+                    time.sleep(2.0)  # Increased delay to avoid 429 errors
         
         logger.info(f"✅ {phase_name}: {total_positions:,} positions collected")
         return total_positions
