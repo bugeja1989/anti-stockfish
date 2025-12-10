@@ -267,6 +267,9 @@ class ContinuousTrainer:
         
         try:
             while True:
+                # Heartbeat log
+                logger.info(f"💓 Heartbeat: Checking for new games... (Models: {self.state['models_trained']}, Positions: {self.state['total_positions_extracted']:,})")
+                
                 # Extract new positions
                 new_positions = self.extract_new_positions()
                 
