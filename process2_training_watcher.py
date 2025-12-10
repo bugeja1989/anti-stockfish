@@ -184,12 +184,15 @@ class ContinuousTrainer:
                         # Log progress every 1000 positions
                         if total_new % 1000 == 0:
                             logger.info(f"   ⚡ Extracted {total_new:,} positions so far...")
+                            # Update state in real-time so GUI sees progress
+                            self.state['total_positions_extracted'] += 1000
+                            self.save_state()
                 
                 except Exception as e:
                     continue
         
         self.state['last_chesscom_entries'] = entries
-        self.state['total_positions_extracted'] += total_new
+        # Note: total_positions_extracted is already updated incrementally in the loop
         self.save_state()
         
         logger.info(f"✅ Extracted {total_new:,} new positions (Total: {self.state['total_positions_extracted']:,})")
@@ -288,8 +291,8 @@ class ContinuousTrainer:
         logger.info(f"🧠 CONTINUOUS TRAINER")
         logger.info(f"{'='*80}\n")
         
-        CHECK_INTERVAL = 30  # Check every 30s
-        TRAIN_INTERVAL = 300  # Train every 5 minutes if new data
+        CHECK_INTERVAL = 10  # Check every 10s
+        TRAIN_INTERVAL = 60   # Train every 1 minute if new data
         
         last_train_time = 0
         
