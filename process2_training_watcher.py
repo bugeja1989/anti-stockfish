@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 # Flask app for API and GUI
 app = Flask(__name__, template_folder='templates')
 
+# Silence Flask access logs
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
+
 class ContinuousTrainer:
     """Continuous training with real-time predictions"""
     
@@ -175,6 +179,10 @@ class ContinuousTrainer:
                             for pos in positions:
                                 pf.write(json.dumps(pos) + '\n')
                                 total_new += 1
+                        
+                        # Log progress every 1000 positions
+                        if total_new % 1000 == 0:
+                            logger.info(f"   ⚡ Extracted {total_new:,} positions so far...")
                 
                 except Exception as e:
                     continue
