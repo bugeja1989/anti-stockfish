@@ -320,7 +320,15 @@ class ContinuousTrainer:
             # Load model if not loaded or if version changed
             model_path = self.model_dir / f"chaos_module_{self.model_version}.pth"
             
-            if not self.latest_model and model_path.exists():
+            # Check if we need to load/reload the model
+            should_reload = False
+            if not self.latest_model:
+                should_reload = True
+            elif hasattr(self, 'loaded_version') and self.loaded_version != self.model_version:
+                should_reload = True
+                logger.info(f"🔄 New version detected ({self.model_version}). Reloading model...")
+            
+            if should_reload and model_path.exists():
                 try:
                     # Import model class dynamically to avoid circular imports
                     sys.path.append('neural_network/src')
@@ -330,6 +338,7 @@ class ContinuousTrainer:
                     self.latest_model = ChaosModule().to(device)
                     self.latest_model.load_state_dict(torch.load(model_path, map_location=device))
                     self.latest_model.eval()
+                    self.loaded_version = self.model_version  # Track loaded version
                     logger.info(f"🧠 Loaded model: {model_path}")
                 except Exception as e:
                     logger.error(f"❌ Failed to load model: {e}")
