@@ -3,20 +3,21 @@
 """
 Anti-Stockfish: Optimized Training Script for Apple M4 Pro
 - Metal Performance Shaders (MPS) GPU acceleration
-- Multi-core data loading
-- Large batch sizes (256) with 24GB RAM
+- Streaming Dataset (IterableDataset) for low memory usage
+- Large batch sizes (1024+) for max throughput
 - Optimized for Apple Silicon
 """
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import IterableDataset, DataLoader
 import json
 import logging
 import argparse
 from pathlib import Path
 import sys
+import itertools
 
 # Import the model
 sys.path.append(str(Path(__file__).parent))
@@ -25,48 +26,38 @@ from model import ChaosModule, SacrificeModule, board_to_tensor
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class ChessDataset(Dataset):
-    """Optimized chess dataset with caching."""
+class StreamingChessDataset(IterableDataset):
+    """Memory-efficient streaming dataset for large files."""
     
     def __init__(self, data_file):
         self.data_file = data_file
-        self.positions = []
         
-        logger.info(f"📥 Loading dataset from {data_file}...")
-        
-        with open(data_file) as f:
+    def __iter__(self):
+        """Yields batches of data directly from file without loading everything to RAM."""
+        with open(self.data_file) as f:
             for line in f:
                 try:
-                    data = json.loads(line)
-                    self.positions.append(data)
+                    pos = json.loads(line)
+                    
+                    # Convert position to tensor
+                    board_tensor = board_to_tensor(pos['fen'])
+                    
+                    # Labels
+                    label_map = {'normal': 0, 'complex': 1, 'sacrifice': 2}
+                    label = label_map.get(pos.get('label', 'normal'), 0)
+                    
+                    # Evaluation (normalized)
+                    eval_score = pos.get('eval', 0.0)
+                    eval_normalized = max(-1.0, min(1.0, eval_score / 10.0))
+                    
+                    yield {
+                        'board': board_tensor,
+                        'label': torch.tensor(label, dtype=torch.long),
+                        'eval': torch.tensor(eval_normalized, dtype=torch.float32),
+                        'chaos': torch.tensor(1.0 if label == 2 else 0.5 if label == 1 else 0.0, dtype=torch.float32)
+                    }
                 except:
                     continue
-        
-        logger.info(f"✅ Loaded {len(self.positions):,} positions")
-    
-    def __len__(self):
-        return len(self.positions)
-    
-    def __getitem__(self, idx):
-        pos = self.positions[idx]
-        
-        # Convert position to tensor
-        board_tensor = board_to_tensor(pos['fen'])
-        
-        # Labels
-        label_map = {'normal': 0, 'complex': 1, 'sacrifice': 2}
-        label = label_map.get(pos.get('label', 'normal'), 0)
-        
-        # Evaluation (normalized)
-        eval_score = pos.get('eval', 0.0)
-        eval_normalized = max(-1.0, min(1.0, eval_score / 10.0))
-        
-        return {
-            'board': board_tensor,
-            'label': torch.tensor(label, dtype=torch.long),
-            'eval': torch.tensor(eval_normalized, dtype=torch.float32),
-            'chaos': torch.tensor(1.0 if label == 2 else 0.5 if label == 1 else 0.0, dtype=torch.float32)
-        }
 
 def train_epoch(chaos_model, sacrifice_model, dataloader, optimizer_chaos, optimizer_sac, device):
     """Train for one epoch."""
@@ -106,19 +97,19 @@ def train_epoch(chaos_model, sacrifice_model, dataloader, optimizer_chaos, optim
         total_loss += (total_chaos_loss.item() + sacrifice_loss.item())
         num_batches += 1
         
-        if (batch_idx + 1) % 10 == 0:
+        if (batch_idx + 1) % 100 == 0:
             avg_loss = total_loss / num_batches
-            logger.info(f"  Batch [{batch_idx + 1}/{len(dataloader)}] Loss: {avg_loss:.4f}")
+            logger.info(f"  Batch {batch_idx + 1} | Loss: {avg_loss:.4f}")
     
-    return total_loss / num_batches
+    return total_loss / max(1, num_batches)
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data', required=True, help='Path to dataset')
-    parser.add_argument('--epochs', type=int, default=20, help='Number of epochs')
-    parser.add_argument('--batch-size', type=int, default=256, help='Batch size')
+    parser.add_argument('--epochs', type=int, default=5, help='Number of epochs')
+    parser.add_argument('--batch-size', type=int, default=1024, help='Batch size')
     parser.add_argument('--device', default='mps', help='Device (mps, cuda, cpu)')
-    parser.add_argument('--num-workers', type=int, default=8, help='DataLoader workers')
+    parser.add_argument('--num-workers', type=int, default=4, help='DataLoader workers')
     args = parser.parse_args()
     
     # Device setup
@@ -136,14 +127,13 @@ def main():
     logger.info(f"⚙️  Workers: {args.num_workers}")
     logger.info(f"⚙️  Epochs: {args.epochs}")
     
-    # Load dataset
-    dataset = ChessDataset(args.data)
+    # Load dataset (Streaming)
+    dataset = StreamingChessDataset(args.data)
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
-        shuffle=True,
         num_workers=args.num_workers,
-        pin_memory=True if device.type == 'mps' else False
+        pin_memory=False  # Disabled for MPS stability
     )
     
     # Models
@@ -155,7 +145,7 @@ def main():
     optimizer_sac = optim.Adam(sacrifice_model.parameters(), lr=0.001)
     
     logger.info(f"\n{'='*80}")
-    logger.info(f"🧠 TRAINING STARTED")
+    logger.info(f"🧠 TRAINING STARTED (STREAMING MODE)")
     logger.info(f"{'='*80}\n")
     
     # Training loop
