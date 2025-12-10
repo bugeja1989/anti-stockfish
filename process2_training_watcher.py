@@ -20,6 +20,7 @@ import torch
 from flask import Flask, request, jsonify, render_template
 from threading import Thread
 import sys
+import re
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,7 +56,7 @@ class ContinuousTrainer:
         
         # Latest model info
         self.latest_model = None
-        self.model_version = 0
+        self.model_version = "v0"
         
         self.load_state()
     
@@ -66,7 +67,8 @@ class ContinuousTrainer:
             'total_positions_extracted': 0,
             'models_trained': 0,
             'last_training_time': None,
-            'training_active': False
+            'training_active': False,
+            'current_version_tag': "v0"
         }
         
         if self.state_file.exists():
@@ -80,8 +82,9 @@ class ContinuousTrainer:
                 # Ensure numeric values are valid
                 self.state['models_trained'] = int(self.state.get('models_trained', 0))
                 self.state['total_positions_extracted'] = int(self.state.get('total_positions_extracted', 0))
+                self.model_version = self.state.get('current_version_tag', "v0")
                 
-                logger.info(f"📊 Loaded: {self.state['models_trained']} models, {self.state['total_positions_extracted']:,} positions")
+                logger.info(f"📊 Loaded: {self.state['models_trained']} models, {self.state['total_positions_extracted']:,} positions, Version: {self.model_version}")
             except Exception as e:
                 logger.warning(f"⚠️  State file corrupted or incompatible ({e}), starting fresh")
                 self.state = default_state
@@ -91,6 +94,7 @@ class ContinuousTrainer:
     
     def save_state(self):
         """Save state"""
+        self.state['current_version_tag'] = self.model_version
         with open(self.state_file, 'w') as f:
             json.dump(self.state, f, indent=2)
     
@@ -262,11 +266,24 @@ class ContinuousTrainer:
                 universal_newlines=True
             )
             
+            # Regex to capture version tag from logs
+            # Example: "Epoch 1/10 (Version v1.1)"
+            version_pattern = re.compile(r"\(Version (v\d+\.\d+)\)")
+            
             # Read output line by line
             for line in process.stdout:
                 line = line.strip()
                 if line:
                     logger.info(f"   🔥 {line}")
+                    
+                    # Check for version update
+                    match = version_pattern.search(line)
+                    if match:
+                        new_version = match.group(1)
+                        if new_version != self.model_version:
+                            self.model_version = new_version
+                            self.save_state()
+                            logger.info(f"   🏷️  GUI Version Updated: {self.model_version}")
             
             process.wait()
             
@@ -274,7 +291,7 @@ class ContinuousTrainer:
                 logger.info(f"✅ Training complete!")
                 self.state['models_trained'] += 1
                 self.state['last_training_time'] = time.time()
-                self.model_version = self.state['models_trained']
+                # Ensure final version is saved
                 self.save_state()
             else:
                 logger.error(f"❌ Training failed with code {process.returncode}")
@@ -314,84 +331,67 @@ class ContinuousTrainer:
         
         except Exception as e:
             return {'error': str(e)}
-    
-    def run_training_loop(self):
-        """Main training loop"""
-        logger.info(f"\n{'='*80}")
-        logger.info(f"🧠 CONTINUOUS TRAINER")
-        logger.info(f"{'='*80}\n")
-        
-        CHECK_INTERVAL = 10  # Check every 10s
-        TRAIN_INTERVAL = 60   # Train every 1 minute if new data
-        
-        last_train_time = 0
-        
-        try:
-            while True:
-                # Heartbeat log
-                logger.info(f"💓 Heartbeat: Checking for new games... (Models: {self.state['models_trained']}, Positions: {self.state['total_positions_extracted']:,})")
-                
-                # Extract new positions
-                new_positions = self.extract_new_positions()
-                
-                # Train if enough time passed and we have new data
-                current_time = time.time()
-                if new_positions > 0 and (current_time - last_train_time) >= TRAIN_INTERVAL:
-                    self.train_model()
-                    last_train_time = current_time
-                
-                time.sleep(CHECK_INTERVAL)
-        
-        except KeyboardInterrupt:
-            logger.info(f"\n⏹️  Stopped")
-            logger.info(f"📊 Models: {self.state['models_trained']}, Positions: {self.state['total_positions_extracted']:,}")
-            self.save_state()
 
 # Global trainer instance
-trainer = None
+trainer = ContinuousTrainer()
 
 @app.route('/')
 def index():
-    """Serve the GUI"""
     return render_template('index.html')
 
-@app.route('/api/best_move', methods=['POST'])
-def api_best_move():
-    """API endpoint for best move"""
+@app.route('/api/status')
+def get_status():
+    return jsonify({
+        'models_trained': trainer.state['models_trained'],
+        'positions_learned': trainer.state['total_positions_extracted'],
+        'current_version': trainer.model_version,
+        'gpu_status': 'METAL ACTIVE' if torch.backends.mps.is_available() else 'CPU ONLY',
+        'training_active': trainer.state['training_active']
+    })
+
+@app.route('/api/analyze', methods=['POST'])
+def analyze():
     data = request.json
     fen = data.get('fen')
-    
     if not fen:
-        return jsonify({'error': 'Missing FEN'}), 400
+        return jsonify({'error': 'No FEN provided'}), 400
     
     result = trainer.get_best_move(fen)
     return jsonify(result)
 
-@app.route('/api/stats', methods=['GET'])
-def api_stats():
-    """API endpoint for training stats"""
-    return jsonify({
-        'models_trained': trainer.state['models_trained'],
-        'positions_extracted': trainer.state['total_positions_extracted'],
-        'training_active': trainer.state['training_active'],
-        'model_version': trainer.model_version
-    })
-
-def run_api_server():
-    """Run Flask API server"""
-    logger.info("🌐 Starting GUI on http://localhost:5443")
+def run_flask():
     app.run(host='0.0.0.0', port=5443, debug=False, use_reloader=False)
 
-def main():
-    global trainer
-    trainer = ContinuousTrainer()
+def main_loop():
+    """Main loop for Process 2"""
+    logger.info("🧠 CONTINUOUS TRAINER")
+    logger.info("="*80)
     
-    # Start API server in background thread
-    api_thread = Thread(target=run_api_server, daemon=True)
-    api_thread.start()
+    # Start Flask in a separate thread
+    flask_thread = Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info("🌐 Starting GUI on http://localhost:5443")
     
-    # Run training loop
-    trainer.run_training_loop()
+    while True:
+        try:
+            logger.info(f"💓 Heartbeat: Checking for new games... (Models: {trainer.state['models_trained']}, Positions: {trainer.state['total_positions_extracted']:,})")
+            
+            # 1. Extract new positions
+            new_positions = trainer.extract_new_positions()
+            
+            # 2. Train if we have enough data
+            if new_positions > 0 or trainer.state['models_trained'] == 0:
+                trainer.train_model()
+            
+            # Sleep before next check
+            time.sleep(10)
+            
+        except KeyboardInterrupt:
+            logger.info("🛑 Stopping Process 2...")
+            break
+        except Exception as e:
+            logger.error(f"❌ Error in main loop: {e}")
+            time.sleep(10)
 
 if __name__ == '__main__':
-    main()
+    main_loop()
