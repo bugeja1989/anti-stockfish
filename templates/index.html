@@ -258,6 +258,7 @@
             // illegal move
             if (move === null) return 'snapback'
 
+            saveGameState();
             updateStatus()
             getBestMove()
         }
@@ -350,8 +351,22 @@
         function resetGame() {
             game.reset();
             board.start();
+            localStorage.removeItem('anti_stockfish_fen');
             updateStatus();
             log("SYSTEM", "Game reset");
+        }
+
+        function saveGameState() {
+            localStorage.setItem('anti_stockfish_fen', game.fen());
+        }
+
+        function loadGameState() {
+            const savedFen = localStorage.getItem('anti_stockfish_fen');
+            if (savedFen) {
+                game.load(savedFen);
+                board.position(savedFen);
+                log("SYSTEM", "Restored saved game state");
+            }
         }
 
         function flipBoard() {
@@ -363,6 +378,7 @@
             if (bestMove && bestMove !== '...') {
                 game.move(bestMove, {sloppy: true});
                 board.position(game.fen());
+                saveGameState();
                 updateStatus();
                 getBestMove();
             }
@@ -379,6 +395,7 @@
         
         board = Chessboard('board', config)
 
+        loadGameState();
         updateStatus()
         
         // Poll for stats every 2 seconds
