@@ -306,7 +306,7 @@ class MegaChessComCollector:
                 g, pos = self.sync_top_player(p)
                 if g > 0:
                     logger.info(f"  [{i+1}/100] {p}: +{g} games")
-                if i % 10 == 0: self.save_state()
+                self.save_state()  # Save after EVERY player to allow safe restarts
             
             # 3. Process 101-1000 (Dig 1000)
             logger.info("⛏️  Processing 101-1000 (Digging 1000 games each)...")
@@ -315,7 +315,7 @@ class MegaChessComCollector:
                 g, pos = self.dig_deep_player(p, limit=1000)
                 if g > 0:
                     logger.info(f"  [{real_rank}/1000] {p}: +{g} games (Deep Dig)")
-                if i % 10 == 0: self.save_state()
+                self.save_state()  # Save after EVERY player to allow safe restarts
             
             self.save_state()
             logger.info("✅ Round Complete. Sleeping 60s...")
