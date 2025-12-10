@@ -119,12 +119,9 @@ class MegaChessComCollector:
                     cache_data = json.load(f)
                     cache_time = datetime.fromisoformat(cache_data.get('timestamp', '2000-01-01T00:00:00'))
                     
-                    # If cache is less than 24 hours old, use it
-                    if datetime.now() - cache_time < timedelta(hours=24):
-                        logger.info(f"📂 Loaded sorted GM list from cache ({len(cache_data['players'])} players, {cache_time})")
-                        return cache_data['players']
-                    else:
-                        logger.info("⚠️  GM cache expired, refreshing...")
+                    # Use cache FOREVER as requested
+                    logger.info(f"📂 Loaded sorted GM list from cache ({len(cache_data['players'])} players, created {cache_time})")
+                    return cache_data['players']
             except Exception as e:
                 logger.warning(f"⚠️  Failed to load GM cache: {e}")
 
@@ -197,10 +194,13 @@ class MegaChessComCollector:
         last_sync = self.state['top_100_last_sync'].get(username, 0)
         archives = self.get_archives(username)
         
+        # If last_sync is 0 (first run), we want ALL archives.
+        # If last_sync > 0 (subsequent runs), we only need recent archives.
         if last_sync == 0:
             target_archives = archives 
+            logger.info(f"  🆕 First run for {username}: Fetching ALL archives...")
         else:
-            target_archives = archives[-3:] 
+            target_archives = archives[-3:] # Check last 3 months for updates
             
         new_games_count = 0
         new_positions_count = 0
