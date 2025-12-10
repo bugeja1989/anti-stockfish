@@ -25,6 +25,32 @@ check_dependency() {
     fi
 }
 
+# CLEANUP: Kill existing processes and free port 5000
+echo "🧹 Cleaning up previous runs..."
+
+# Kill by PID files if they exist
+if [ -f process1.pid ]; then
+    kill $(cat process1.pid) 2>/dev/null
+    rm process1.pid
+fi
+if [ -f process2.pid ]; then
+    kill $(cat process2.pid) 2>/dev/null
+    rm process2.pid
+fi
+
+# Kill by process name (just in case)
+pkill -f "process1_chesscom_collector.py"
+pkill -f "process2_training_watcher.py"
+
+# Free port 5000 (macOS/Linux)
+echo "🔓 Freeing port 5000..."
+lsof -ti:5000 | xargs kill -9 2>/dev/null
+
+# Wait for cleanup
+sleep 2
+echo "✅ Cleanup complete!"
+echo ""
+
 echo "🔍 Checking dependencies..."
 check_dependency "flask"
 check_dependency "chess"
