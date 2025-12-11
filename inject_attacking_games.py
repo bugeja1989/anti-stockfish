@@ -12,7 +12,9 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # URLs for Attacking Legends
 DATA_SOURCES = {
     "Tal": "https://www.pgnmentor.com/players/Tal.zip",
-    "Kasparov": "https://www.pgnmentor.com/players/Kasparov.zip"
+    "Kasparov": "https://www.pgnmentor.com/players/Kasparov.zip",
+    "Nakamura": "https://www.pgnmentor.com/players/Nakamura.zip",
+    "Carlsen": "https://www.pgnmentor.com/players/Carlsen.zip"
 }
 
 DATA_DIR = Path("neural_network/data")
