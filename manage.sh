@@ -78,12 +78,39 @@ while true; do
     echo "0. Stop ALL & Exit"
     echo "--------------------------------------------------"
     echo "H. Health Check & Fix (Run this if issues!)"
+    echo "R. Factory Reset (Wipe Data & Start Fresh)"
     echo "L. View Logs"
     echo "Q. Quit Menu (Keep services running)"
     echo "=================================================="
     read -p "Select an option: " choice
 
     case $choice in
+        R|r)
+            echo -e "${RED}⚠️  DANGER ZONE: FACTORY RESET ⚠️${NC}"
+            echo "This will DELETE ALL training data, models, and logs."
+            echo "You will lose all progress and have to re-inject the Opening Book."
+            read -p "Are you absolutely sure? (type 'yes' to confirm): " confirm
+            
+            if [[ $confirm == "yes" ]]; then
+                echo "🛑 Stopping all services..."
+                stop_service "collector"
+                stop_service "trainer"
+                stop_service "gui"
+                
+                echo "🗑️  Deleting data..."
+                rm -f neural_network/data/extracted_positions.jsonl
+                rm -f neural_network/models/*.pth
+                rm -f process2_state.json
+                rm -f *.log
+                
+                echo "✅ System Reset Complete."
+                echo "💡 Tip: Run 'H' (Health Check) now to re-inject the Opening Book!"
+            else
+                echo "❌ Reset cancelled."
+            fi
+            echo "Press Enter to continue..."
+            read
+            ;;
         H|h)
             echo "🏥 Running System Health Check..."
             
