@@ -75,58 +75,6 @@ class ContinuousTrainer:
         book = {}
         files = ['ecoA.json', 'ecoB.json', 'ecoC.json', 'ecoD.json', 'ecoE.json']
         count = 0
-        for filename in files:
-            path = self.data_dir / filename
-            if path.exists():
-                try:
-                    with open(path) as f:
-                        data = json.load(f)
-                        # Data is {FEN: {moves: "1. e4...", ...}}
-                        # We need to map FEN -> Best Move (first move in 'moves' string relative to FEN?)
-                        # Actually, the JSON keys are FENs. The 'moves' string is the full line.
-                        # We need to parse the NEXT move from the FEN.
-                        # However, the JSON structure is: FEN -> Opening Info.
-                        # The FEN is the position *after* the moves? Or the starting position of the variation?
-                        # Let's assume the FEN is the position we are IN.
-                        # Wait, the JSON keys are FENs.
-                        # If we are at FEN X, and it's in the book, what is the move?
-                        # The 'moves' string in the JSON is the *history* that led to this FEN.
-                        # It does NOT tell us the *next* move.
-                        #
-                        # BUT, we injected these into training data by playing through them.
-                        # To use them as a lookup book, we need {FEN -> Next Move}.
-                        # Since the JSON only gives us the FEN and the moves that got there,
-                        # we can't easily know the *next* move unless we have a tree.
-                        #
-                        # ALTERNATIVE: We already injected these into `extracted_positions.jsonl`.
-                        # But that's for training.
-                        #
-                        # BETTER APPROACH:
-                        # We can build a simple FEN->Move map by iterating through the PGNs in the JSONs again.
-                        # For each opening line "1. e4 e5 2. Nf3...", we play it.
-                        # Position before 1. e4 -> Move e4
-                        # Position after 1. e4 -> Move e5
-                        # ...
-                        # We store this in a dictionary.
-                        
-                        for op in data.values():
-                            pgn_moves = op.get('moves', '')
-                            if not pgn_moves: continue
-                            
-                            # We need to parse this PGN
-                            # Since we don't want to re-parse everything on every startup (slow),
-                            # maybe we should rely on the model being trained on this?
-                            # The user said "I need the Openings to always be the models that is run for the first 10 moves".
-                            # This implies strict lookup if possible.
-                            # Parsing 12k games on startup might take 10-20 seconds. Acceptable.
-                            pass 
-                            
-                except Exception as e:
-                    logger.error(f"Failed to load {filename}: {e}")
-        
-        # Actually, let's implement the parsing logic properly in a separate method or just do it here.
-        # To avoid blocking startup too long, we can do it in a background thread or just accept the delay.
-        # Let's do it here for simplicity.
         
         logger.info("📚 Building Opening Book Lookup Table (this may take a moment)...")
         lookup_table = {}
@@ -249,598 +197,446 @@ class ContinuousTrainer:
             if not game:
                 return positions
             
-            result = game.headers.get('Result', '*')
-            if result == '1-0':
-                outcome = 1.0
-            elif result == '0-1':
-                outcome = 0.0
-            else:
-                outcome = 0.5
-            
             board = game.board()
-            move_number = 1  # Start from move 1
             
+            # Get result score
+            result = game.headers.get("Result", "*")
+            if result == "1-0":
+                game_score = 1.0
+            elif result == "0-1":
+                game_score = 0.0
+            else:
+                game_score = 0.5
+                
+            # Extract FENs
             for move in game.mainline_moves():
-                fen = board.fen()
-                
-                position = {
-                    'fen': fen,
-                    'move': move.uci(),
-                    'outcome': outcome,
-                    'move_number': move_number,
-                    'source': 'chesscom'
-                }
-                
-                positions.append(position)
                 board.push(move)
-                move_number += 1
-            
-            return positions
-        
+                positions.append({
+                    'fen': board.fen(),
+                    'score': game_score,
+                    'source': 'chesscom_import'
+                })
+                
         except Exception as e:
-            return positions
-    
-    def extract_new_positions(self):
-        """Extract positions from new games"""
-        entries = self.get_dataset_size(self.chesscom_dataset)
-        new_entries = entries - self.state['last_chesscom_entries']
-        
-        if new_entries <= 0:
-            return 0
-        
-        # Limit batch size to allow training to happen more often
-        BATCH_LIMIT = 5000  # Process max 5000 games per cycle to catch up with collector
-        entries_to_process = min(new_entries, BATCH_LIMIT)
-        
-        logger.info(f"📊 Processing {entries_to_process} new entries (Batch limit: {BATCH_LIMIT})...")
-        
-        total_new = 0
-        processed_count = 0
-        
-        with open(self.chesscom_dataset) as f:
-            # Skip processed
-            for _ in range(self.state['last_chesscom_entries']):
-                next(f)
+            logger.error(f"Error extracting positions: {e}")
             
-            # Process new (up to limit)
-            for line in f:
-                if processed_count >= BATCH_LIMIT:
-                    break
+        return positions
+
+    def run_extraction_cycle(self):
+        """Check for new games and extract positions"""
+        if not self.chesscom_dataset.exists():
+            return 0
+            
+        current_lines = self.get_dataset_size(self.chesscom_dataset)
+        new_lines = current_lines - self.state['last_chesscom_entries']
+        
+        if new_lines > 0:
+            logger.info(f"📥 Found {new_lines} new games to process...")
+            
+            count = 0
+            with open(self.chesscom_dataset) as f:
+                # Skip processed lines
+                for _ in range(self.state['last_chesscom_entries']):
+                    next(f)
                 
-                processed_count += 1
-                try:
-                    entry = json.loads(line)
-                    games = entry.get('games', [])
-                    
-                    for game_data in games:
-                        positions = self.extract_positions_from_game(game_data)
-                        
-                        with open(self.positions_dataset, 'a') as pf:
+                # Process new lines
+                with open(self.positions_dataset, 'a') as out:
+                    for line in f:
+                        try:
+                            game_data = json.loads(line)
+                            positions = self.extract_positions_from_game(game_data)
                             for pos in positions:
-                                pf.write(json.dumps(pos) + '\n')
-                                total_new += 1
-                        
-                        # Log progress every 1000 positions
-                        if total_new % 1000 == 0:
-                            logger.info(f"   ⚡ Extracted {total_new:,} positions so far...")
-                            # Update state in real-time so GUI sees progress
-                            self.state['total_positions_extracted'] += 1000
-                            self.save_state()
-                
-                except Exception as e:
-                    continue
+                                out.write(json.dumps(pos) + '\n')
+                                count += 1
+                        except:
+                            continue
+            
+            self.state['last_chesscom_entries'] = current_lines
+            self.state['total_positions_extracted'] += count
+            self.save_state()
+            logger.info(f"✅ Extracted {count} new positions. Total: {self.state['total_positions_extracted']:,}")
+            return count
         
-        self.state['last_chesscom_entries'] += processed_count
-        # Sync total positions with actual file size
-        real_total = self.get_dataset_size(self.positions_dataset)
-        self.state['total_positions_extracted'] = real_total
-        self.save_state()
-        
-        logger.info(f"✅ Extracted {total_new:,} new positions (Total: {real_total:,})")
-        
-        return total_new
-    
-    def train_model(self):
-        """Train model"""
-        total_positions = self.get_dataset_size(self.positions_dataset)
-        
-        if total_positions < 1000:
-            logger.warning(f"⚠️  Need more positions ({total_positions}/1000)")
+        return 0
+
+    def run_training_cycle(self):
+        """Run one epoch of training if we have enough data"""
+        if self.state['total_positions_extracted'] < 100:
             return False
-        
-        logger.info(f"\n{'='*80}")
-        logger.info(f"🧠 TRAINING MODEL #{self.state['models_trained'] + 1}")
-        logger.info(f"📊 Positions: {total_positions:,}")
-        logger.info(f"{'='*80}\n")
-        
+            
+        logger.info("🏋️  Starting Training Cycle...")
         self.state['training_active'] = True
         self.save_state()
         
         try:
-            # Check for GPU
-            GPU_AVAILABLE = torch.backends.mps.is_available()
-            device = "mps" if GPU_AVAILABLE else "cpu"
-            # Use larger batch size for M4 Pro to maximize throughput
-            BATCH_SIZE = 1024 if GPU_AVAILABLE else 64
+            # Call the training script as a subprocess
+            # We use the separate train.py script to keep memory clean
+            cmd = [sys.executable, "neural_network/src/train.py", "--epochs", "1", "--batch-size", "64"]
+            result = subprocess.run(cmd, capture_output=True, text=True)
             
-            logger.info(f"🔥 GPU: {'MPS (Metal)' if GPU_AVAILABLE else 'CPU'}")
-            logger.info(f"📦 Batch size: {BATCH_SIZE}")
-            
-            # Fixed epochs as requested
-            epochs = 6
-            
-            cmd = [
-                "python3", "neural_network/src/train.py",
-                "--data", str(self.positions_dataset),
-                "--epochs", str(epochs),
-                "--batch-size", str(BATCH_SIZE),
-                "--device", device,
-                "--num-workers", "8",
-                "--resume",
-                "--run-id", str(self.state['models_trained'] + 1)
-            ]
-            
-            logger.info(f"🚀 Executing: {' '.join(cmd)}")
-            
-            # Stream output in real-time
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
-            )
-            
-            # Regex to capture version tag from logs
-            # Example: "Epoch 1/10 (Version v1.1)"
-            version_pattern = re.compile(r"\(Version v(\d+\.\d+)\)")
-            
-            # Read output line by line
-            for line in process.stdout:
-                line = line.strip()
-                if line:
-                    logger.info(f"   🔥 {line}")
-                    
-                    # Check for version update
-                    match = version_pattern.search(line)
-                    if match:
-                        # Capture only the number part (e.g., "1.1")
-                        new_version = "v" + match.group(1)
-                        if new_version != self.model_version:
-                            self.model_version = new_version
-                            self.save_state()
-                            logger.info(f"   🏷️  GUI Version Updated: {self.model_version}")
-            
-            process.wait()
-            
-            if process.returncode == 0:
-                logger.info(f"✅ Training complete!")
+            if result.returncode == 0:
                 self.state['models_trained'] += 1
                 self.state['last_training_time'] = time.time()
-                # Ensure final version is saved
+                
+                # Update version tag
+                self.model_version = f"v{self.state['models_trained']}"
                 self.save_state()
+                
+                logger.info(f"✅ Training Complete! New Version: {self.model_version}")
+                logger.info(f"Output: {result.stdout.strip()}")
+                return True
             else:
-                logger.error(f"❌ Training failed with code {process.returncode}")
-            
-            self.state['training_active'] = False
-            self.save_state()
-            
-            return process.returncode == 0
-        
+                logger.error(f"❌ Training Failed: {result.stderr}")
+                return False
+                
         except Exception as e:
-            logger.error(f"❌ Training failed: {e}")
-            self.state['training_active'] = False
-            self.save_state()
+            logger.error(f"❌ Training Error: {e}")
             return False
-    
-    def get_stockfish_move(self, fen: str, elo: int) -> dict:
-        """Get move from Stockfish at specific ELO"""
-        if not self.stockfish_path:
-            return {'error': 'Stockfish not found'}
-            
-        try:
-            board = chess.Board(fen)
-            
-            # Limit ELO (Stockfish supports UCI_LimitStrength and UCI_Elo)
-            with chess.engine.SimpleEngine.popen_uci(self.stockfish_path) as engine:
-                # Configure ELO
-                if elo < 500:
-                    # For very low ELO, we also limit nodes to ensure it plays badly
-                    engine.configure({"UCI_LimitStrength": True, "UCI_Elo": elo})
-                    result = engine.play(board, chess.engine.Limit(nodes=100)) # Limit nodes for stupidity
-                else:
-                    engine.configure({"UCI_LimitStrength": True, "UCI_Elo": elo})
-                    # Time limit based on ELO (give it a bit more time for higher ELOs)
-                    time_limit = 0.1 if elo < 1500 else 0.5 if elo < 2500 else 1.0
-                    result = engine.play(board, chess.engine.Limit(time=time_limit))
-                
-                return {'best_move': result.move.uci(), 'elo': elo}
-                
-        except Exception as e:
-            logger.error(f"Stockfish error: {e}")
-            return {'error': str(e)}
+        finally:
+            self.state['training_active'] = False
+            self.save_state()
 
-    def get_best_move(self, fen: str, pgn: str = None) -> dict:
-        """Get best move for position using the latest trained model"""
-        try:
-            board = chess.Board(fen)
-            legal_moves = list(board.legal_moves)
-            
-            # Parse PGN to detect repetitions
-            history_fens = []
-            if pgn:
-                try:
-                    pgn_io = io.StringIO(pgn)
-                    game = chess.pgn.read_game(pgn_io)
-                    if game:
-                        temp_board = game.board()
-                        history_fens.append(temp_board.fen().split(' ')[0]) # Store position only (no clocks)
-                        for move in game.mainline_moves():
-                            temp_board.push(move)
-                            history_fens.append(temp_board.fen().split(' ')[0])
-                        # Ensure we are at the current position
-                        board = temp_board
-                except Exception as e:
-                    logger.warning(f"Failed to parse PGN for repetition check: {e}")
-            
-            if not legal_moves:
-                return {'error': 'No legal moves'}
-            
-            # ---------------------------------------------------------
-            # 1. OPENING BOOK LOOKUP (Strict Mode for Moves 1-10)
-            # ---------------------------------------------------------
-            # Check book BEFORE loading model to save time and ensure reliability
-            move_count = board.fullmove_number
-            if move_count <= 15 and hasattr(self, 'opening_book'): # Extended to 15 moves
-                # Normalize current FEN for lookup
-                fen_norm = " ".join(fen.split(" ")[:4])
-                book_move_uci = self.opening_book.get(fen_norm)
-                
-                if book_move_uci:
-                    # Verify legality just in case
-                    if chess.Move.from_uci(book_move_uci) in board.legal_moves:
-                        logger.info(f"📖 Book Move Found: {book_move_uci} (Move {move_count})")
-                        return {
-                            'best_move': book_move_uci,
-                            'eval': 0.6, # Book value
-                            'model_version': "Opening Book (ECO)",
-                            'positions_trained': self.state['total_positions_extracted'],
-                            'models_trained': self.state['models_trained']
-                        }
-
-            # ---------------------------------------------------------
-            # 2. MODEL LOADING
-            # ---------------------------------------------------------
-            # Load model if not loaded or if version changed
-            model_path = self.model_dir / f"chaos_module_{self.model_version}.pth"
-            latest_path = self.model_dir / "chaos_module_latest.pth"
-            
-            # Check if we need to load/reload the model
-            should_reload = False
-            if not self.latest_model:
-                should_reload = True
-            elif hasattr(self, 'loaded_version') and self.loaded_version != self.model_version:
-                should_reload = True
-                logger.info(f"🔄 New version detected ({self.model_version}). Reloading model...")
-            
-            if should_reload:
-                target_path = model_path if model_path.exists() else latest_path
-                
-                if target_path.exists():
-                    try:
-                        # Import model class dynamically to avoid circular imports
-                        sys.path.append('neural_network/src')
-                        from model import ChaosModule
-                        
-                        device = "mps" if torch.backends.mps.is_available() else "cpu"
-                        self.latest_model = ChaosModule().to(device)
-                        self.latest_model.load_state_dict(torch.load(target_path, map_location=device))
-                        self.latest_model.eval()
-                        self.loaded_version = self.model_version  # Track loaded version
-                        logger.info(f"🧠 Loaded model: {target_path}")
-                    except Exception as e:
-                        logger.error(f"❌ Failed to load model: {e}")
-                        self.latest_model = None
-                else:
-                    logger.warning(f"⚠️ Model file not found: {target_path}")
-
-            # If no model available yet, fallback to random legal move
-            if not self.latest_model:
-                import random
-                return {
-                    'best_move': random.choice(legal_moves).uci(),
-                    'eval': 0.0,
-                    'model_version': self.model_version + " (Random Fallback)",
-                    'positions_trained': self.state['total_positions_extracted'],
-                    'models_trained': self.state['models_trained']
-                }
-            
-            # ---------------------------------------------------------
-            # 2. SMART SEARCH (Alpha-Beta Pruning + Policy Guidance)
-            # ---------------------------------------------------------
-            
-            # Helper function to convert board to tensor
-            def board_to_tensor(fen):
-                import numpy as np
-                board = chess.Board(fen)
-                tensor = np.zeros((12, 8, 8), dtype=np.float32)
-                piece_idx = {
-                    chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2,
-                    chess.ROOK: 3, chess.QUEEN: 4, chess.KING: 5
-                }
-                for square in chess.SQUARES:
-                    piece = board.piece_at(square)
-                    if piece:
-                        row = 7 - (square // 8)
-                        col = square % 8
-                        channel = piece_idx[piece.piece_type]
-                        if piece.color == chess.BLACK:
-                            channel += 6
-                        tensor[channel, row, col] = 1.0
-                return torch.from_numpy(tensor)
-
-            device = "mps" if torch.backends.mps.is_available() else "cpu"
-            
-            # Evaluation Function (Leaf Node)
-            def evaluate_position(board):
-                fen = board.fen()
-                tensor = board_to_tensor(fen).unsqueeze(0).to(device)
-                with torch.no_grad():
-                    policy, value, chaos = self.latest_model(tensor)
-                    
-                    # Base Score: Value Head
-                    score = value.item()
-                    
-                    # Chaos Bonus (Anti-Stockfish Personality)
-                    # Only apply chaos if NOT in opening (Moves > 10)
-                    if board.fullmove_number > 10:
-                        score += (chaos.item() * 0.1)
-                    
-                    # ---------------------------------------------------------
-                    # 3. MATERIAL SACRIFICE HEURISTIC (The "Tal" Logic)
-                    # ---------------------------------------------------------
-                    # If we are down material but have high chaos/activity, boost score.
-                    # This encourages the engine to "believe" in its sacrifices.
-                    
-                    # Simple material count
-                    piece_values = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9}
-                    white_mat = sum(len(board.pieces(pt, chess.WHITE)) * val for pt, val in piece_values.items())
-                    black_mat = sum(len(board.pieces(pt, chess.BLACK)) * val for pt, val in piece_values.items())
-                    
-                    mat_diff = white_mat - black_mat
-                    
-                    # If we are White and down material (mat_diff < 0)
-                    # OR if we are Black and down material (mat_diff > 0)
-                    # AND chaos score is high (> 0.5), we assume it's a brilliant sacrifice.
-                    
-                    is_white = (board.turn == chess.WHITE)
-                    down_material = (mat_diff < -1 if is_white else mat_diff > 1)
-                    
-                    if down_material and chaos.item() > 0.5:
-                        # "Trust the Chaos" - recover some of the lost material score
-                        # We add a "Compensation Bonus"
-                        compensation = 0.5 * chaos.item() # Up to 0.5 pawn worth of "faith"
-                        if is_white:
-                            score += compensation
-                        else:
-                            score -= compensation
-                            
-                    # Perspective: Always return score from WHITE's perspective for Minimax
-                    return score
-
-            # Alpha-Beta Search
-            def alpha_beta(board, depth, alpha, beta, maximizing_player):
-                if depth == 0 or board.is_game_over():
-                    return evaluate_position(board)
-                
+    def get_best_move(self, fen, history_fens=[]):
+        """Get best move using Opening Book -> Neural Net -> Stockfish Fallback"""
+        
+        # ---------------------------------------------------------
+        # 1. OPENING BOOK LOOKUP (Moves 1-10)
+        # ---------------------------------------------------------
+        board = chess.Board(fen)
+        move_count = board.fullmove_number
+        
+        # Normalize FEN for lookup (remove move clocks)
+        fen_norm = " ".join(fen.split(" ")[:4])
+        
+        if move_count <= 10:
+            if fen_norm in self.opening_book:
+                book_move_uci = self.opening_book[fen_norm]
                 legal_moves = list(board.legal_moves)
-                
-                # Move Ordering: Captures and Checks first (simple heuristic)
-                # Ideally we use Policy Head here, but for speed we use simple heuristics first
-                legal_moves.sort(key=lambda m: board.is_capture(m) or board.is_check(), reverse=True)
-                
-                if maximizing_player:
-                    max_eval = -float('inf')
-                    for move in legal_moves:
-                        board.push(move)
-                        eval = alpha_beta(board, depth - 1, alpha, beta, False)
-                        board.pop()
-                        max_eval = max(max_eval, eval)
-                        alpha = max(alpha, eval)
-                        if beta <= alpha:
-                            break
-                    return max_eval
-                else:
-                    min_eval = float('inf')
-                    for move in legal_moves:
-                        board.push(move)
-                        eval = alpha_beta(board, depth - 1, alpha, beta, True)
-                        board.pop()
-                        min_eval = min(min_eval, eval)
-                        beta = min(beta, eval)
-                        if beta <= alpha:
-                            break
-                    return min_eval
+                if chess.Move.from_uci(book_move_uci) in board.legal_moves:
+                    logger.info(f"📖 Book Move Found: {book_move_uci} (Move {move_count})")
+                    return {
+                        'best_move': book_move_uci,
+                        'eval': 0.6, # Book value
+                        'model_version': "Opening Book (ECO)",
+                        'positions_trained': self.state['total_positions_extracted'],
+                        'models_trained': self.state['models_trained']
+                    }
 
-            # Root Search
-            best_move = None
-            best_eval = -float('inf')
+        # ---------------------------------------------------------
+        # 2. MODEL LOADING
+        # ---------------------------------------------------------
+        # Load model if not loaded or if version changed
+        model_path = self.model_dir / f"chaos_module_{self.model_version}.pth"
+        latest_path = self.model_dir / "chaos_module_latest.pth"
+        
+        # Check if we need to load/reload the model
+        should_reload = False
+        if not self.latest_model:
+            should_reload = True
+        elif hasattr(self, 'loaded_version') and self.loaded_version != self.model_version:
+            should_reload = True
+            logger.info(f"🔄 New version detected ({self.model_version}). Reloading model...")
+        
+        if should_reload:
+            target_path = model_path if model_path.exists() else latest_path
             
-            # Depth 3 Search (Fast but deeper than 1-ply)
-            SEARCH_DEPTH = 3
-            alpha = -float('inf')
-            beta = float('inf')
-            
-            # Root Move Ordering: Use Policy Head to sort candidate moves!
-            # This is CRITICAL for finding the best move quickly
-            root_tensor = board_to_tensor(board.fen()).unsqueeze(0).to(device)
-            with torch.no_grad():
-                policy_logits, _, _ = self.latest_model(root_tensor)
-                # We can't easily map logits to moves without the move map from training.
-                # For now, we fallback to capture-heuristic ordering at root too.
-                pass
+            if target_path.exists():
+                try:
+                    # Import model class dynamically to avoid circular imports
+                    sys.path.append('neural_network/src')
+                    from model import ChaosModule
+                    
+                    device = "mps" if torch.backends.mps.is_available() else "cpu"
+                    self.latest_model = ChaosModule().to(device)
+                    self.latest_model.load_state_dict(torch.load(target_path, map_location=device))
+                    self.latest_model.eval()
+                    self.loaded_version = self.model_version  # Track loaded version
+                    logger.info(f"🧠 Loaded model: {target_path}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to load model: {e}")
+                    self.latest_model = None
+            else:
+                logger.warning(f"⚠️ Model file not found: {target_path}")
 
-            legal_moves.sort(key=lambda m: board.is_capture(m) or board.is_check(), reverse=True)
-            
-            maximizing_player = (board.turn == chess.WHITE)
-            
-            for move in legal_moves:
-                board.push(move)
-                
-                # Check for repetition immediately at root
-                fen_simple = board.fen().split(' ')[0]
-                repetition_count = history_fens.count(fen_simple)
-                
-                if repetition_count >= 2:
-                    # Nuclear penalty for 3-fold
-                    eval = -1000.0 if maximizing_player else 1000.0
-                elif repetition_count == 1:
-                    # Strong penalty for 2-fold
-                    penalty = 5.0
-                    if maximizing_player:
-                        eval = alpha_beta(board, SEARCH_DEPTH - 1, alpha, beta, False) - penalty
-                    else:
-                        eval = alpha_beta(board, SEARCH_DEPTH - 1, alpha, beta, True) + penalty
-                else:
-                    # Normal search
-                    if maximizing_player:
-                        eval = alpha_beta(board, SEARCH_DEPTH - 1, alpha, beta, False)
-                    else:
-                        eval = alpha_beta(board, SEARCH_DEPTH - 1, alpha, beta, True)
-                
-                board.pop()
-                
-                # Update Best Move
-                # If we are White, we want Max Eval. If Black, we want Min Eval.
-                # But `best_eval` variable tracks the score for the *current turn player*.
-                # So we always want to maximize `eval` relative to our perspective?
-                # No, standard Minimax:
-                # If White (Max): Pick move with highest eval.
-                # If Black (Min): Pick move with lowest eval.
-                
-                if maximizing_player:
-                    if eval > best_eval:
-                        best_eval = eval
-                        best_move = move
-                    alpha = max(alpha, eval)
-                else:
-                    # For Black, "best" means lowest score (most negative)
-                    # But we need to store it. Let's initialize best_eval differently for Black.
-                    if best_move is None or eval < best_eval:
-                        best_eval = eval
-                        best_move = move
-                    beta = min(beta, eval)
-            
-            # If Black, best_eval is negative. For display, we might want to flip it?
-            # Usually engines display score relative to side to move.
-            display_eval = best_eval if maximizing_player else -best_eval
-
+        # If no model available yet, fallback to random legal move
+        legal_moves = list(board.legal_moves)
+        if not self.latest_model:
+            import random
             return {
-                'best_move': best_move.uci(),
-                'eval': round(display_eval, 4),
-                'model_version': self.model_version,
+                'best_move': random.choice(legal_moves).uci(),
+                'eval': 0.0,
+                'model_version': self.model_version + " (Random Fallback)",
                 'positions_trained': self.state['total_positions_extracted'],
-                'models_trained': self.state['models_trained'],
-                'depth': SEARCH_DEPTH
+                'models_trained': self.state['models_trained']
             }
         
-        except Exception as e:
-            logger.error(f"Inference error: {e}")
-            return {'error': str(e)}
+        # ---------------------------------------------------------
+        # 2. SMART SEARCH (Alpha-Beta Pruning + Policy Guidance)
+        # ---------------------------------------------------------
+        
+        # Helper function to convert board to tensor
+        def board_to_tensor(fen):
+            import numpy as np
+            board = chess.Board(fen)
+            tensor = np.zeros((12, 8, 8), dtype=np.float32)
+            piece_idx = {
+                chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2,
+                chess.ROOK: 3, chess.QUEEN: 4, chess.KING: 5
+            }
+            for square in chess.SQUARES:
+                piece = board.piece_at(square)
+                if piece:
+                    row = 7 - (square // 8)
+                    col = square % 8
+                    channel = piece_idx[piece.piece_type]
+                    if piece.color == chess.BLACK:
+                        channel += 6
+                    tensor[channel, row, col] = 1.0
+            return torch.from_numpy(tensor)
 
-# Global trainer instance
+        device = "mps" if torch.backends.mps.is_available() else "cpu"
+        
+        # Evaluation Function (Leaf Node)
+        def evaluate_position(board):
+            fen = board.fen()
+            tensor = board_to_tensor(fen).unsqueeze(0).to(device)
+            with torch.no_grad():
+                policy, value, chaos = self.latest_model(tensor)
+                
+                # Base Score: Value Head
+                score = value.item()
+                
+                # Chaos Bonus (Anti-Stockfish Personality)
+                # Only apply chaos if NOT in opening (Moves > 10)
+                chaos_bonus = 0.0
+                if board.fullmove_number > 10:
+                    chaos_bonus = (chaos.item() * 0.1)
+                    score += chaos_bonus
+                
+                # ---------------------------------------------------------
+                # 3. MATERIAL SACRIFICE HEURISTIC (The "Tal" Logic)
+                # ---------------------------------------------------------
+                # If we are down material but have high chaos/activity, boost score.
+                # This encourages the engine to "believe" in its sacrifices.
+                
+                # Simple material count
+                piece_values = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9}
+                white_mat = sum(len(board.pieces(pt, chess.WHITE)) * val for pt, val in piece_values.items())
+                black_mat = sum(len(board.pieces(pt, chess.BLACK)) * val for pt, val in piece_values.items())
+                
+                mat_diff = white_mat - black_mat
+                
+                # If we are White and down material (mat_diff < 0)
+                # OR if we are Black and down material (mat_diff > 0)
+                # AND chaos score is high (> 0.5), we assume it's a brilliant sacrifice.
+                
+                is_white = (board.turn == chess.WHITE)
+                down_material = (mat_diff < -1 if is_white else mat_diff > 1)
+                
+                sac_bonus = 0.0
+                if down_material and chaos.item() > 0.5:
+                    # "Trust the Chaos" - recover some of the lost material score
+                    # We add a "Compensation Bonus"
+                    # TUNED DOWN: Was 0.5, now 0.2 to prevent reckless sacrifices
+                    compensation = 0.2 * chaos.item() 
+                    if is_white:
+                        sac_bonus = compensation
+                        score += compensation
+                    else:
+                        sac_bonus = -compensation
+                        score -= compensation
+                
+                # LOGGING FOR DEBUGGING
+                # Only log for the root move search to avoid spam, but we are inside recursion here.
+                # We can't easily log every leaf.
+                # But we can attach these metrics to the returned score if we changed the return type,
+                # but Minimax expects a float.
+                # So we just return the score.
+                        
+                # Perspective: Always return score from WHITE's perspective for Minimax
+                return score
+
+        # Alpha-Beta Search
+        def alpha_beta(board, depth, alpha, beta, maximizing_player):
+            if depth == 0 or board.is_game_over():
+                return evaluate_position(board)
+            
+            legal_moves = list(board.legal_moves)
+            
+            # Move Ordering: Captures and Checks first (simple heuristic)
+            # Ideally we use Policy Head here, but for speed we use simple heuristics first
+            legal_moves.sort(key=lambda m: board.is_capture(m) or board.is_check(), reverse=True)
+            
+            if maximizing_player:
+                max_eval = -float('inf')
+                for move in legal_moves:
+                    board.push(move)
+                    eval = alpha_beta(board, depth - 1, alpha, beta, False)
+                    board.pop()
+                    max_eval = max(max_eval, eval)
+                    alpha = max(alpha, eval)
+                    if beta <= alpha:
+                        break
+                return max_eval
+            else:
+                min_eval = float('inf')
+                for move in legal_moves:
+                    board.push(move)
+                    eval = alpha_beta(board, depth - 1, alpha, beta, True)
+                    board.pop()
+                    min_eval = min(min_eval, eval)
+                    beta = min(beta, eval)
+                    if beta <= alpha:
+                        break
+                return min_eval
+
+        # Root Search
+        best_move = None
+        best_eval = -float('inf')
+        
+        # Depth 3 Search (Fast but deeper than 1-ply)
+        SEARCH_DEPTH = 3
+        alpha = -float('inf')
+        beta = float('inf')
+        
+        # Root Move Ordering: Use Policy Head to sort candidate moves!
+        # This is CRITICAL for finding the best move quickly
+        root_tensor = board_to_tensor(board.fen()).unsqueeze(0).to(device)
+        with torch.no_grad():
+            policy_logits, _, _ = self.latest_model(root_tensor)
+            # We can't easily map logits to moves without the move map from training.
+            # For now, we fallback to capture-heuristic ordering at root too.
+            pass
+
+        legal_moves.sort(key=lambda m: board.is_capture(m) or board.is_check(), reverse=True)
+        
+        maximizing_player = (board.turn == chess.WHITE)
+        
+        # Detailed Logging for Root Moves
+        logger.info(f"🔍 Searching Best Move for {board.fen()} (Depth {SEARCH_DEPTH})")
+        
+        for move in legal_moves:
+            board.push(move)
+            
+            # Check for repetition immediately at root
+            fen_simple = board.fen().split(' ')[0]
+            repetition_count = history_fens.count(fen_simple)
+            
+            if repetition_count >= 2:
+                # Nuclear penalty for 3-fold
+                eval = -1000.0 if maximizing_player else 1000.0
+            elif repetition_count == 1:
+                # Strong penalty for 2-fold
+                penalty = 5.0
+                if maximizing_player:
+                    eval = alpha_beta(board, SEARCH_DEPTH - 1, alpha, beta, False) - penalty
+                else:
+                    eval = alpha_beta(board, SEARCH_DEPTH - 1, alpha, beta, True) + penalty
+            else:
+                # Normal search
+                if maximizing_player:
+                    eval = alpha_beta(board, SEARCH_DEPTH - 1, alpha, beta, False)
+                else:
+                    eval = alpha_beta(board, SEARCH_DEPTH - 1, alpha, beta, True)
+            
+            # Log the evaluation for this candidate move
+            logger.info(f"   Move {move.uci()}: Eval={eval:.4f}")
+
+            board.pop()
+            
+            # Update Best Move
+            # If we are White, we want Max Eval. If Black, we want Min Eval.
+            # But `best_eval` variable tracks the score for the *current turn player*.
+            # So we always want to maximize `eval` relative to our perspective?
+            # No, standard Minimax:
+            # If White (Max): Pick move with highest eval.
+            # If Black (Min): Pick move with lowest eval.
+            
+            if maximizing_player:
+                if eval > best_eval:
+                    best_eval = eval
+                    best_move = move
+                alpha = max(alpha, eval)
+            else:
+                # For Black, "best" means lowest score (most negative)
+                # But we need to store it. Let's initialize best_eval differently for Black.
+                if best_move is None or eval < best_eval:
+                    best_eval = eval
+                    best_move = move
+                beta = min(beta, eval)
+        
+        # If Black, best_eval is negative. For display, we might want to flip it?
+        # The GUI expects +1.0 for White winning, -1.0 for Black winning.
+        # Our model outputs 0.0 to 1.0 (Sigmoid).
+        # Wait, our model output is 0-1 (Win Prob).
+        # But our AlphaBeta treats it as a score.
+        # If model says 0.8, that's good for White.
+        # If model says 0.2, that's good for Black.
+        # So Maximize for White, Minimize for Black is correct.
+        
+        if best_move:
+            logger.info(f"🏆 Best Move: {best_move.uci()} (Eval: {best_eval:.4f})")
+            return {
+                'best_move': best_move.uci(),
+                'eval': best_eval,
+                'model_version': self.model_version,
+                'positions_trained': self.state['total_positions_extracted'],
+                'models_trained': self.state['models_trained']
+            }
+        else:
+            return {
+                'best_move': None,
+                'eval': 0.0,
+                'model_version': self.model_version,
+                'positions_trained': self.state['total_positions_extracted'],
+                'models_trained': self.state['models_trained']
+            }
+
+# Global Trainer Instance
 trainer = ContinuousTrainer()
+
+# Background Thread for Continuous Operations
+def background_loop():
+    while True:
+        try:
+            # 1. Extract new positions
+            trainer.run_extraction_cycle()
+            
+            # 2. Train if enough data
+            trainer.run_training_cycle()
+            
+            # Sleep to avoid CPU hogging
+            time.sleep(5)
+        except Exception as e:
+            logger.error(f"Background Loop Error: {e}")
+            time.sleep(5)
+
+# Start Background Thread
+t = Thread(target=background_loop, daemon=True)
+t.start()
+
+# API Endpoints
+@app.route('/api/stats', methods=['GET'])
+def get_stats():
+    # Reload state from disk to get latest numbers from background thread
+    trainer.load_state()
+    return jsonify(trainer.state)
+
+@app.route('/api/best_move', methods=['POST'])
+def best_move():
+    data = request.json
+    fen = data.get('fen')
+    history = data.get('history', []) # List of FENs for repetition check
+    
+    if not fen:
+        return jsonify({'error': 'No FEN provided'}), 400
+        
+    result = trainer.get_best_move(fen, history)
+    return jsonify(result)
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/api/stats')
-def get_stats():
-    # Reload state from disk to get latest updates from the Training process
-    trainer.load_state()
-    return jsonify({
-        'models_trained': trainer.state['models_trained'],
-        'positions_extracted': trainer.state['total_positions_extracted'],
-        'model_version': trainer.model_version,
-        'gpu_status': 'METAL ACTIVE' if torch.backends.mps.is_available() else 'CPU ONLY',
-        'training_active': trainer.state['training_active']
-    })
-
-@app.route('/api/analyze', methods=['POST'])
-def analyze():
-    data = request.json
-    fen = data.get('fen')
-    pgn = data.get('pgn') # Get PGN for repetition check
-    
-    if not fen:
-        return jsonify({'error': 'No FEN provided'}), 400
-    
-    result = trainer.get_best_move(fen, pgn)
-    return jsonify(result)
-
-@app.route('/api/stockfish', methods=['POST'])
-def stockfish_move():
-    data = request.json
-    fen = data.get('fen')
-    elo = int(data.get('elo', 1500))
-    
-    if not fen:
-        return jsonify({'error': 'No FEN provided'}), 400
-        
-    result = trainer.get_stockfish_move(fen, elo)
-    return jsonify(result)
-
-def run_flask():
-    app.run(host='0.0.0.0', port=5443, debug=False, use_reloader=False)
-
-def main_loop():
-    """Main loop for Process 2"""
-    parser = argparse.ArgumentParser(description='Anti-Stockfish Engine & Trainer')
-    parser.add_argument('--mode', type=str, default='both', choices=['training', 'gui', 'both'],
-                        help='Mode to run: "training" (backend only), "gui" (frontend only), or "both" (default)')
-    args = parser.parse_args()
-
-    logger.info(f"🧠 ANTI-STOCKFISH (Mode: {args.mode.upper()})")
-    logger.info("="*80)
-    
-    # GUI MODE or BOTH
-    if args.mode in ['gui', 'both']:
-        # Start Flask
-        # If 'gui' mode, we run Flask in the main thread (blocking)
-        # If 'both' mode, we run Flask in a separate thread
-        if args.mode == 'gui':
-            logger.info("🌐 Starting GUI on http://localhost:5443 (Inference Only)")
-            run_flask() # Blocking
-            return # Exit when Flask stops
-        else:
-            flask_thread = Thread(target=run_flask, daemon=True)
-            flask_thread.start()
-            logger.info("🌐 Starting GUI on http://localhost:5443")
-
-    # TRAINING MODE or BOTH
-    if args.mode in ['training', 'both']:
-        while True:
-            try:
-                logger.info(f"💓 Heartbeat: Checking for new games... (Models: {trainer.state['models_trained']}, Positions: {trainer.state['total_positions_extracted']:,})")
-                
-                # 1. Extract new positions
-                new_positions = trainer.extract_new_positions()
-                
-                # 2. Train if we have enough data
-                if new_positions > 0 or trainer.state['models_trained'] == 0:
-                    trainer.train_model()
-                
-                # Sleep before next check
-                time.sleep(10)
-                
-            except KeyboardInterrupt:
-                logger.info("🛑 Stopping Process 2...")
-                break
-            except Exception as e:
-                logger.error(f"❌ Error in main loop: {e}")
-                time.sleep(10)
-
 if __name__ == '__main__':
-    main_loop()
+    app.run(host='0.0.0.0', port=5000)
