@@ -146,11 +146,14 @@ class ContinuousTrainer:
                                 
                                 board = game.board()
                                 for move in game.mainline_moves():
+                                    # Normalize FEN: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+                                    # We want: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -"
+                                    # Split by space and take first 4 parts
                                     fen = board.fen()
+                                    fen_norm = " ".join(fen.split(" ")[:4])
+                                    
                                     # Store the move for this FEN
-                                    # If multiple moves exist for a FEN (transpositions), we overwrite.
-                                    # This is fine for a basic book.
-                                    lookup_table[fen] = move.uci()
+                                    lookup_table[fen_norm] = move.uci()
                                     board.push(move)
                                     
                                     # Stop after 15 moves to keep table size manageable?
@@ -488,8 +491,11 @@ class ContinuousTrainer:
             # ---------------------------------------------------------
             # Check book BEFORE loading model to save time and ensure reliability
             move_count = board.fullmove_number
-            if move_count <= 10 and hasattr(self, 'opening_book'):
-                book_move_uci = self.opening_book.get(fen)
+            if move_count <= 15 and hasattr(self, 'opening_book'): # Extended to 15 moves
+                # Normalize current FEN for lookup
+                fen_norm = " ".join(fen.split(" ")[:4])
+                book_move_uci = self.opening_book.get(fen_norm)
+                
                 if book_move_uci:
                     # Verify legality just in case
                     if chess.Move.from_uci(book_move_uci) in board.legal_moves:
@@ -617,10 +623,13 @@ class ContinuousTrainer:
                     # REPETITION PENALTY
                     # If position has occurred 2+ times, apply massive penalty to avoid 3-fold repetition
                     if repetition_count >= 2:
-                        score -= 100.0 # Massive penalty (Draw)
-                        logger.info(f"🚫 Avoiding repetition: {move.uci()} (Count: {repetition_count})")
+                        score -= 1000.0 # NUCLEAR penalty (Draw is forbidden)
+                        logger.info(f"🚫 Avoiding 3-fold repetition: {move.uci()} (Count: {repetition_count})")
                     elif repetition_count == 1:
-                        score -= 2.0 # Strong penalty for 2nd occurrence to break loops early
+                        score -= 5.0 # Stronger penalty for 2nd occurrence to prevent shuffling
+                        # If we are in chaos mode, we might tolerate it slightly, but generally we want progress.
+                        # But for Anti-Stockfish, shuffling is death.
+                        logger.info(f"⚠️ Discouraging repetition: {move.uci()}")
                 
                 if score > best_eval:
                     best_eval = score
