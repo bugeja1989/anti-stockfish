@@ -556,15 +556,10 @@ class ContinuousTrainer:
                 }
             
             # ---------------------------------------------------------
-            # 2. NEURAL NETWORK INFERENCE
+            # 2. SMART SEARCH (Alpha-Beta Pruning + Policy Guidance)
             # ---------------------------------------------------------
             
-            # Prepare input for model
-            # We need to evaluate ALL legal moves and pick the best one
-            best_move = None
-            best_eval = -float('inf')
-            
-            # Helper function to convert board to tensor (copied from model.py to avoid import issues)
+            # Helper function to convert board to tensor
             def board_to_tensor(fen):
                 import numpy as np
                 board = chess.Board(fen)
@@ -584,65 +579,169 @@ class ContinuousTrainer:
                         tensor[channel, row, col] = 1.0
                 return torch.from_numpy(tensor)
 
-            # Evaluate all legal moves (1-ply search)
             device = "mps" if torch.backends.mps.is_available() else "cpu"
             
-            for move in legal_moves:
-                board.push(move)
-                fen_after = board.fen()
-                fen_simple = fen_after.split(' ')[0] # Position only
-                
-                # Check for repetition
-                repetition_count = history_fens.count(fen_simple)
-                
-                # Convert to tensor
-                tensor = board_to_tensor(fen_after).unsqueeze(0).to(device)
-                
-                # Inference
+            # Evaluation Function (Leaf Node)
+            def evaluate_position(board):
+                fen = board.fen()
+                tensor = board_to_tensor(fen).unsqueeze(0).to(device)
                 with torch.no_grad():
                     policy, value, chaos = self.latest_model(tensor)
                     
-                    # Score = Value (positional) + Chaos (complexity bonus)
-                    # We invert value if it's Black's turn (since model predicts White's advantage)
+                    # Base Score: Value Head
                     score = value.item()
-                    if board.turn == chess.BLACK:
-                        score = -score
-                        
-                    # Add chaos bonus (Anti-Stockfish prefers chaos!)
-                    # STRICT OPENING MODE: If we are out of book but still in first 10 moves,
-                    # we use ZERO chaos to ensure we play solid chess (Value Head only).
-                    # After move 10, we unleash the chaos.
                     
-                    if move_count <= 10:
-                        chaos_weight = 0.0  # Pure solid play in opening
-                    else:
-                        chaos_weight = 0.1  # Chaos mode activated
-                        
-                    score += (chaos.item() * chaos_weight)
+                    # Chaos Bonus (Anti-Stockfish Personality)
+                    # Only apply chaos if NOT in opening (Moves > 10)
+                    if board.fullmove_number > 10:
+                        score += (chaos.item() * 0.1)
                     
-                    # REPETITION PENALTY
-                    # If position has occurred 2+ times, apply massive penalty to avoid 3-fold repetition
-                    if repetition_count >= 2:
-                        score -= 1000.0 # NUCLEAR penalty (Draw is forbidden)
-                        logger.info(f"🚫 Avoiding 3-fold repetition: {move.uci()} (Count: {repetition_count})")
-                    elif repetition_count == 1:
-                        score -= 5.0 # Stronger penalty for 2nd occurrence to prevent shuffling
-                        # If we are in chaos mode, we might tolerate it slightly, but generally we want progress.
-                        # But for Anti-Stockfish, shuffling is death.
-                        logger.info(f"⚠️ Discouraging repetition: {move.uci()}")
+                    # ---------------------------------------------------------
+                    # 3. MATERIAL SACRIFICE HEURISTIC (The "Tal" Logic)
+                    # ---------------------------------------------------------
+                    # If we are down material but have high chaos/activity, boost score.
+                    # This encourages the engine to "believe" in its sacrifices.
+                    
+                    # Simple material count
+                    piece_values = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9}
+                    white_mat = sum(len(board.pieces(pt, chess.WHITE)) * val for pt, val in piece_values.items())
+                    black_mat = sum(len(board.pieces(pt, chess.BLACK)) * val for pt, val in piece_values.items())
+                    
+                    mat_diff = white_mat - black_mat
+                    
+                    # If we are White and down material (mat_diff < 0)
+                    # OR if we are Black and down material (mat_diff > 0)
+                    # AND chaos score is high (> 0.5), we assume it's a brilliant sacrifice.
+                    
+                    is_white = (board.turn == chess.WHITE)
+                    down_material = (mat_diff < -1 if is_white else mat_diff > 1)
+                    
+                    if down_material and chaos.item() > 0.5:
+                        # "Trust the Chaos" - recover some of the lost material score
+                        # We add a "Compensation Bonus"
+                        compensation = 0.5 * chaos.item() # Up to 0.5 pawn worth of "faith"
+                        if is_white:
+                            score += compensation
+                        else:
+                            score -= compensation
+                            
+                    # Perspective: Always return score from WHITE's perspective for Minimax
+                    return score
+
+            # Alpha-Beta Search
+            def alpha_beta(board, depth, alpha, beta, maximizing_player):
+                if depth == 0 or board.is_game_over():
+                    return evaluate_position(board)
                 
-                if score > best_eval:
-                    best_eval = score
-                    best_move = move
+                legal_moves = list(board.legal_moves)
+                
+                # Move Ordering: Captures and Checks first (simple heuristic)
+                # Ideally we use Policy Head here, but for speed we use simple heuristics first
+                legal_moves.sort(key=lambda m: board.is_capture(m) or board.is_check(), reverse=True)
+                
+                if maximizing_player:
+                    max_eval = -float('inf')
+                    for move in legal_moves:
+                        board.push(move)
+                        eval = alpha_beta(board, depth - 1, alpha, beta, False)
+                        board.pop()
+                        max_eval = max(max_eval, eval)
+                        alpha = max(alpha, eval)
+                        if beta <= alpha:
+                            break
+                    return max_eval
+                else:
+                    min_eval = float('inf')
+                    for move in legal_moves:
+                        board.push(move)
+                        eval = alpha_beta(board, depth - 1, alpha, beta, True)
+                        board.pop()
+                        min_eval = min(min_eval, eval)
+                        beta = min(beta, eval)
+                        if beta <= alpha:
+                            break
+                    return min_eval
+
+            # Root Search
+            best_move = None
+            best_eval = -float('inf')
+            
+            # Depth 3 Search (Fast but deeper than 1-ply)
+            SEARCH_DEPTH = 3
+            alpha = -float('inf')
+            beta = float('inf')
+            
+            # Root Move Ordering: Use Policy Head to sort candidate moves!
+            # This is CRITICAL for finding the best move quickly
+            root_tensor = board_to_tensor(board.fen()).unsqueeze(0).to(device)
+            with torch.no_grad():
+                policy_logits, _, _ = self.latest_model(root_tensor)
+                # We can't easily map logits to moves without the move map from training.
+                # For now, we fallback to capture-heuristic ordering at root too.
+                pass
+
+            legal_moves.sort(key=lambda m: board.is_capture(m) or board.is_check(), reverse=True)
+            
+            maximizing_player = (board.turn == chess.WHITE)
+            
+            for move in legal_moves:
+                board.push(move)
+                
+                # Check for repetition immediately at root
+                fen_simple = board.fen().split(' ')[0]
+                repetition_count = history_fens.count(fen_simple)
+                
+                if repetition_count >= 2:
+                    # Nuclear penalty for 3-fold
+                    eval = -1000.0 if maximizing_player else 1000.0
+                elif repetition_count == 1:
+                    # Strong penalty for 2-fold
+                    penalty = 5.0
+                    if maximizing_player:
+                        eval = alpha_beta(board, SEARCH_DEPTH - 1, alpha, beta, False) - penalty
+                    else:
+                        eval = alpha_beta(board, SEARCH_DEPTH - 1, alpha, beta, True) + penalty
+                else:
+                    # Normal search
+                    if maximizing_player:
+                        eval = alpha_beta(board, SEARCH_DEPTH - 1, alpha, beta, False)
+                    else:
+                        eval = alpha_beta(board, SEARCH_DEPTH - 1, alpha, beta, True)
                 
                 board.pop()
+                
+                # Update Best Move
+                # If we are White, we want Max Eval. If Black, we want Min Eval.
+                # But `best_eval` variable tracks the score for the *current turn player*.
+                # So we always want to maximize `eval` relative to our perspective?
+                # No, standard Minimax:
+                # If White (Max): Pick move with highest eval.
+                # If Black (Min): Pick move with lowest eval.
+                
+                if maximizing_player:
+                    if eval > best_eval:
+                        best_eval = eval
+                        best_move = move
+                    alpha = max(alpha, eval)
+                else:
+                    # For Black, "best" means lowest score (most negative)
+                    # But we need to store it. Let's initialize best_eval differently for Black.
+                    if best_move is None or eval < best_eval:
+                        best_eval = eval
+                        best_move = move
+                    beta = min(beta, eval)
             
+            # If Black, best_eval is negative. For display, we might want to flip it?
+            # Usually engines display score relative to side to move.
+            display_eval = best_eval if maximizing_player else -best_eval
+
             return {
                 'best_move': best_move.uci(),
-                'eval': round(best_eval, 4),
+                'eval': round(display_eval, 4),
                 'model_version': self.model_version,
                 'positions_trained': self.state['total_positions_extracted'],
-                'models_trained': self.state['models_trained']
+                'models_trained': self.state['models_trained'],
+                'depth': SEARCH_DEPTH
             }
         
         except Exception as e:
