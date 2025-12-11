@@ -483,49 +483,12 @@ class ContinuousTrainer:
             if not legal_moves:
                 return {'error': 'No legal moves'}
             
-            # Load model if not loaded or if version changed
-            model_path = self.model_dir / f"chaos_module_{self.model_version}.pth"
-            
-            # Check if we need to load/reload the model
-            should_reload = False
-            if not self.latest_model:
-                should_reload = True
-            elif hasattr(self, 'loaded_version') and self.loaded_version != self.model_version:
-                should_reload = True
-                logger.info(f"🔄 New version detected ({self.model_version}). Reloading model...")
-            
-            if should_reload and model_path.exists():
-                try:
-                    # Import model class dynamically to avoid circular imports
-                    sys.path.append('neural_network/src')
-                    from model import ChaosModule
-                    
-                    device = "mps" if torch.backends.mps.is_available() else "cpu"
-                    self.latest_model = ChaosModule().to(device)
-                    self.latest_model.load_state_dict(torch.load(model_path, map_location=device))
-                    self.latest_model.eval()
-                    self.loaded_version = self.model_version  # Track loaded version
-                    logger.info(f"🧠 Loaded model: {model_path}")
-                except Exception as e:
-                    logger.error(f"❌ Failed to load model: {e}")
-                    self.latest_model = None
-
-            # If no model available yet, fallback to random legal move
-            if not self.latest_model:
-                import random
-                return {
-                    'best_move': random.choice(legal_moves).uci(),
-                    'eval': 0.0,
-                    'model_version': self.model_version + " (Random Fallback)",
-                    'positions_trained': self.state['total_positions_extracted'],
-                    'models_trained': self.state['models_trained']
-                }
-
             # ---------------------------------------------------------
             # 1. OPENING BOOK LOOKUP (Strict Mode for Moves 1-10)
             # ---------------------------------------------------------
+            # Check book BEFORE loading model to save time and ensure reliability
             move_count = board.fullmove_number
-            if move_count <= 10:
+            if move_count <= 10 and hasattr(self, 'opening_book'):
                 book_move_uci = self.opening_book.get(fen)
                 if book_move_uci:
                     # Verify legality just in case
@@ -538,6 +501,53 @@ class ContinuousTrainer:
                             'positions_trained': self.state['total_positions_extracted'],
                             'models_trained': self.state['models_trained']
                         }
+
+            # ---------------------------------------------------------
+            # 2. MODEL LOADING
+            # ---------------------------------------------------------
+            # Load model if not loaded or if version changed
+            model_path = self.model_dir / f"chaos_module_{self.model_version}.pth"
+            latest_path = self.model_dir / "chaos_module_latest.pth"
+            
+            # Check if we need to load/reload the model
+            should_reload = False
+            if not self.latest_model:
+                should_reload = True
+            elif hasattr(self, 'loaded_version') and self.loaded_version != self.model_version:
+                should_reload = True
+                logger.info(f"🔄 New version detected ({self.model_version}). Reloading model...")
+            
+            if should_reload:
+                target_path = model_path if model_path.exists() else latest_path
+                
+                if target_path.exists():
+                    try:
+                        # Import model class dynamically to avoid circular imports
+                        sys.path.append('neural_network/src')
+                        from model import ChaosModule
+                        
+                        device = "mps" if torch.backends.mps.is_available() else "cpu"
+                        self.latest_model = ChaosModule().to(device)
+                        self.latest_model.load_state_dict(torch.load(target_path, map_location=device))
+                        self.latest_model.eval()
+                        self.loaded_version = self.model_version  # Track loaded version
+                        logger.info(f"🧠 Loaded model: {target_path}")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to load model: {e}")
+                        self.latest_model = None
+                else:
+                    logger.warning(f"⚠️ Model file not found: {target_path}")
+
+            # If no model available yet, fallback to random legal move
+            if not self.latest_model:
+                import random
+                return {
+                    'best_move': random.choice(legal_moves).uci(),
+                    'eval': 0.0,
+                    'model_version': self.model_version + " (Random Fallback)",
+                    'positions_trained': self.state['total_positions_extracted'],
+                    'models_trained': self.state['models_trained']
+                }
             
             # ---------------------------------------------------------
             # 2. NEURAL NETWORK INFERENCE
