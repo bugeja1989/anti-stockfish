@@ -94,10 +94,12 @@ def inject_opening_book():
                                 continue
                             
                             # Create training entry
+                            # Label: 1.0 (Win/Best Move)
+                            # We want the model to treat opening book moves as "perfect" play.
                             position = {
                                 'fen': fen,
                                 'move': move.uci(),
-                                'outcome': 0.6, # Solid/Book move
+                                'outcome': 1.0, # Treat book moves as winning moves
                                 'move_number': move_number,
                                 'source': 'opening_book_eco_12k',
                                 'opening_name': name,

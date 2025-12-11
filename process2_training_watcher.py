@@ -65,6 +65,105 @@ class ContinuousTrainer:
             logger.info(f"✅ Stockfish found at: {self.stockfish_path}")
         else:
             logger.warning("⚠️  Stockfish NOT found! Simulation mode will fail.")
+            
+        # Load Opening Book
+        self.opening_book = self.load_opening_book()
+
+    def load_opening_book(self):
+        """Load ECO opening book into memory"""
+        book = {}
+        files = ['ecoA.json', 'ecoB.json', 'ecoC.json', 'ecoD.json', 'ecoE.json']
+        count = 0
+        for filename in files:
+            path = self.data_dir / filename
+            if path.exists():
+                try:
+                    with open(path) as f:
+                        data = json.load(f)
+                        # Data is {FEN: {moves: "1. e4...", ...}}
+                        # We need to map FEN -> Best Move (first move in 'moves' string relative to FEN?)
+                        # Actually, the JSON keys are FENs. The 'moves' string is the full line.
+                        # We need to parse the NEXT move from the FEN.
+                        # However, the JSON structure is: FEN -> Opening Info.
+                        # The FEN is the position *after* the moves? Or the starting position of the variation?
+                        # Let's assume the FEN is the position we are IN.
+                        # Wait, the JSON keys are FENs.
+                        # If we are at FEN X, and it's in the book, what is the move?
+                        # The 'moves' string in the JSON is the *history* that led to this FEN.
+                        # It does NOT tell us the *next* move.
+                        #
+                        # BUT, we injected these into training data by playing through them.
+                        # To use them as a lookup book, we need {FEN -> Next Move}.
+                        # Since the JSON only gives us the FEN and the moves that got there,
+                        # we can't easily know the *next* move unless we have a tree.
+                        #
+                        # ALTERNATIVE: We already injected these into `extracted_positions.jsonl`.
+                        # But that's for training.
+                        #
+                        # BETTER APPROACH:
+                        # We can build a simple FEN->Move map by iterating through the PGNs in the JSONs again.
+                        # For each opening line "1. e4 e5 2. Nf3...", we play it.
+                        # Position before 1. e4 -> Move e4
+                        # Position after 1. e4 -> Move e5
+                        # ...
+                        # We store this in a dictionary.
+                        
+                        for op in data.values():
+                            pgn_moves = op.get('moves', '')
+                            if not pgn_moves: continue
+                            
+                            # We need to parse this PGN
+                            # Since we don't want to re-parse everything on every startup (slow),
+                            # maybe we should rely on the model being trained on this?
+                            # The user said "I need the Openings to always be the models that is run for the first 10 moves".
+                            # This implies strict lookup if possible.
+                            # Parsing 12k games on startup might take 10-20 seconds. Acceptable.
+                            pass 
+                            
+                except Exception as e:
+                    logger.error(f"Failed to load {filename}: {e}")
+        
+        # Actually, let's implement the parsing logic properly in a separate method or just do it here.
+        # To avoid blocking startup too long, we can do it in a background thread or just accept the delay.
+        # Let's do it here for simplicity.
+        
+        logger.info("📚 Building Opening Book Lookup Table (this may take a moment)...")
+        lookup_table = {}
+        
+        for filename in files:
+            path = self.data_dir / filename
+            if path.exists():
+                try:
+                    with open(path) as f:
+                        data = json.load(f)
+                        for op in data.values():
+                            pgn_moves = op.get('moves', '')
+                            if not pgn_moves: continue
+                            
+                            try:
+                                game = chess.pgn.read_game(io.StringIO(pgn_moves))
+                                if not game: continue
+                                
+                                board = game.board()
+                                for move in game.mainline_moves():
+                                    fen = board.fen()
+                                    # Store the move for this FEN
+                                    # If multiple moves exist for a FEN (transpositions), we overwrite.
+                                    # This is fine for a basic book.
+                                    lookup_table[fen] = move.uci()
+                                    board.push(move)
+                                    
+                                    # Stop after 15 moves to keep table size manageable?
+                                    # User said "first 10 moves". Let's go up to 15.
+                                    if board.fullmove_number > 15:
+                                        break
+                            except:
+                                continue
+                except:
+                    pass
+        
+        logger.info(f"📚 Opening Book Ready: {len(lookup_table):,} positions loaded.")
+        return lookup_table
 
     def find_stockfish(self):
         """Locate stockfish executable"""
@@ -422,6 +521,28 @@ class ContinuousTrainer:
                     'models_trained': self.state['models_trained']
                 }
 
+            # ---------------------------------------------------------
+            # 1. OPENING BOOK LOOKUP (Strict Mode for Moves 1-10)
+            # ---------------------------------------------------------
+            move_count = board.fullmove_number
+            if move_count <= 10:
+                book_move_uci = self.opening_book.get(fen)
+                if book_move_uci:
+                    # Verify legality just in case
+                    if chess.Move.from_uci(book_move_uci) in board.legal_moves:
+                        logger.info(f"📖 Book Move Found: {book_move_uci} (Move {move_count})")
+                        return {
+                            'best_move': book_move_uci,
+                            'eval': 0.6, # Book value
+                            'model_version': "Opening Book (ECO)",
+                            'positions_trained': self.state['total_positions_extracted'],
+                            'models_trained': self.state['models_trained']
+                        }
+            
+            # ---------------------------------------------------------
+            # 2. NEURAL NETWORK INFERENCE
+            # ---------------------------------------------------------
+            
             # Prepare input for model
             # We need to evaluate ALL legal moves and pick the best one
             best_move = None
@@ -472,9 +593,15 @@ class ContinuousTrainer:
                         score = -score
                         
                     # Add chaos bonus (Anti-Stockfish prefers chaos!)
-                    # Reduce chaos in opening (first 10 moves) to avoid suicidal openings like Nh3/Ng5
-                    move_count = board.fullmove_number
-                    chaos_weight = 0.02 if move_count <= 10 else 0.1
+                    # STRICT OPENING MODE: If we are out of book but still in first 10 moves,
+                    # we use ZERO chaos to ensure we play solid chess (Value Head only).
+                    # After move 10, we unleash the chaos.
+                    
+                    if move_count <= 10:
+                        chaos_weight = 0.0  # Pure solid play in opening
+                    else:
+                        chaos_weight = 0.1  # Chaos mode activated
+                        
                     score += (chaos.item() * chaos_weight)
                     
                     # REPETITION PENALTY
