@@ -60,7 +60,7 @@ stop_service() {
 while true; do
     clear
     echo "=================================================="
-    echo "♟️  Anti-Stockfish: SERVICE MANAGER"
+    echo "♟️  Anti-Stockfish: SERVICE MANAGER (v2.0)"
     echo "=================================================="
     echo -e "1. Collector (Data Mining)   [$(check_status collector)]"
     echo -e "2. Trainer   (AI Learning)   [$(check_status trainer)]"
@@ -75,12 +75,13 @@ while true; do
     echo "8. Start GUI"
     echo "9. Stop GUI"
     echo "--------------------------------------------------"
-    echo "0. Stop ALL & Exit"
+    echo "A. Start ALL"
+    echo "S. Stop ALL"
     echo "--------------------------------------------------"
-    echo "H. Health Check & Fix (Run this if issues!)"
-    echo "R. Factory Reset (Wipe Data & Start Fresh)"
+    echo "H. Health Check & Fix"
+    echo "R. Factory Reset (Wipe Data)"
     echo "L. View Logs"
-    echo "Q. Quit Menu (Keep services running)"
+    echo "Q. Quit Menu"
     echo "=================================================="
     read -p "Select an option: " choice
 
@@ -88,7 +89,6 @@ while true; do
         R|r)
             echo -e "${RED}⚠️  DANGER ZONE: FACTORY RESET ⚠️${NC}"
             echo "This will DELETE ALL training data, models, and logs."
-            echo "You will lose all progress and have to re-inject the Opening Book."
             read -p "Are you absolutely sure? (type 'yes' to confirm): " confirm
             
             if [[ $confirm == "yes" ]]; then
@@ -136,45 +136,31 @@ while true; do
             else
                 lines=$(wc -l < "neural_network/data/extracted_positions.jsonl")
                 echo "✅ Opening Book present ($lines positions)."
-                if [ "$lines" -lt 10000 ]; then
-                    echo "⚠️  Warning: Dataset seems small (<10k). You might be missing the full book."
-                    read -p "Re-inject full Opening Book? (y/n) " ans
-                    if [[ $ans == "y" ]]; then python3 inject_opening_book.py; fi
-                fi
             fi
             
             # 4. Check Tal Games
-            # We check if inject_attacking_games.py has been run.
-            # A simple heuristic is checking if the dataset grew significantly or if we can grep "Tal" from logs?
-            # Better: Just ask user if they want to inject Tal games.
             echo "❓ Have you injected the Tal/Kasparov games?"
             read -p "Inject them now? (y/n) " ans
             if [[ $ans == "y" ]]; then python3 inject_attacking_games.py; fi
-            
-            # 5. Check Models
-            echo "🧠 Checking for trained models..."
-            model_count=$(ls neural_network/models/*.pth 2>/dev/null | wc -l)
-            if [ "$model_count" -eq 0 ]; then
-                echo "⚠️  No trained models found. The engine will play randomly until training starts."
-                echo "   (Make sure to Start Trainer from the menu!)"
-            else
-                echo "✅ Found $model_count trained model(s)."
-            fi
             
             echo "✅ Health Check Complete. Press Enter."
             read
             ;;
         4) start_service "collector" "python3 process1_chesscom_collector.py" "process1.log" ;;
         5) stop_service "collector" ;;
-        6) start_service "trainer" "python3 process2_training_watcher.py --mode training" "process2_training.log" ;;
+        6) start_service "trainer" "python3 process2_trainer.py" "process2_training.log" ;;
         7) stop_service "trainer" ;;
-        8) start_service "gui" "python3 process2_training_watcher.py --mode gui" "process2_gui.log" ;;
+        8) start_service "gui" "python3 web_gui.py" "web_gui.log" ;;
         9) stop_service "gui" ;;
-        0) 
+        A|a)
+            start_service "collector" "python3 process1_chesscom_collector.py" "process1.log"
+            start_service "trainer" "python3 process2_trainer.py" "process2_training.log"
+            start_service "gui" "python3 web_gui.py" "web_gui.log"
+            ;;
+        S|s)
             stop_service "collector"
             stop_service "trainer"
             stop_service "gui"
-            exit 0
             ;;
         L|l)
             echo "Which log? (1=Collector, 2=Trainer, 3=GUI)"
@@ -182,7 +168,7 @@ while true; do
             case $log_choice in
                 1) tail -f process1.log ;;
                 2) tail -f process2_training.log ;;
-                3) tail -f process2_gui.log ;;
+                3) tail -f web_gui.log ;;
             esac
             ;;
         Q|q) exit 0 ;;
