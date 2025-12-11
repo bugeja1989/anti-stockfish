@@ -22,6 +22,7 @@ from flask import Flask, request, jsonify, render_template
 from threading import Thread
 import sys
 import re
+import argparse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -794,34 +795,50 @@ def run_flask():
 
 def main_loop():
     """Main loop for Process 2"""
-    logger.info("🧠 CONTINUOUS TRAINER")
+    parser = argparse.ArgumentParser(description='Anti-Stockfish Engine & Trainer')
+    parser.add_argument('--mode', type=str, default='both', choices=['training', 'gui', 'both'],
+                        help='Mode to run: "training" (backend only), "gui" (frontend only), or "both" (default)')
+    args = parser.parse_args()
+
+    logger.info(f"🧠 ANTI-STOCKFISH (Mode: {args.mode.upper()})")
     logger.info("="*80)
     
-    # Start Flask in a separate thread
-    flask_thread = Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    logger.info("🌐 Starting GUI on http://localhost:5443")
-    
-    while True:
-        try:
-            logger.info(f"💓 Heartbeat: Checking for new games... (Models: {trainer.state['models_trained']}, Positions: {trainer.state['total_positions_extracted']:,})")
-            
-            # 1. Extract new positions
-            new_positions = trainer.extract_new_positions()
-            
-            # 2. Train if we have enough data
-            if new_positions > 0 or trainer.state['models_trained'] == 0:
-                trainer.train_model()
-            
-            # Sleep before next check
-            time.sleep(10)
-            
-        except KeyboardInterrupt:
-            logger.info("🛑 Stopping Process 2...")
-            break
-        except Exception as e:
-            logger.error(f"❌ Error in main loop: {e}")
-            time.sleep(10)
+    # GUI MODE or BOTH
+    if args.mode in ['gui', 'both']:
+        # Start Flask
+        # If 'gui' mode, we run Flask in the main thread (blocking)
+        # If 'both' mode, we run Flask in a separate thread
+        if args.mode == 'gui':
+            logger.info("🌐 Starting GUI on http://localhost:5443 (Inference Only)")
+            run_flask() # Blocking
+            return # Exit when Flask stops
+        else:
+            flask_thread = Thread(target=run_flask, daemon=True)
+            flask_thread.start()
+            logger.info("🌐 Starting GUI on http://localhost:5443")
+
+    # TRAINING MODE or BOTH
+    if args.mode in ['training', 'both']:
+        while True:
+            try:
+                logger.info(f"💓 Heartbeat: Checking for new games... (Models: {trainer.state['models_trained']}, Positions: {trainer.state['total_positions_extracted']:,})")
+                
+                # 1. Extract new positions
+                new_positions = trainer.extract_new_positions()
+                
+                # 2. Train if we have enough data
+                if new_positions > 0 or trainer.state['models_trained'] == 0:
+                    trainer.train_model()
+                
+                # Sleep before next check
+                time.sleep(10)
+                
+            except KeyboardInterrupt:
+                logger.info("🛑 Stopping Process 2...")
+                break
+            except Exception as e:
+                logger.error(f"❌ Error in main loop: {e}")
+                time.sleep(10)
 
 if __name__ == '__main__':
     main_loop()
