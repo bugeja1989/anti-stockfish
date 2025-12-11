@@ -20,10 +20,10 @@ nohup python3 process1_chesscom_collector.py > process1.log 2>&1 &
 PID1=$!
 echo "   ✅ Collector running (PID: $PID1)"
 
-# 4. Start Training & Inference Engine (Foreground)
-echo "🏋️  Starting Training & Inference Engine (Process 2)..."
+# 4. Start Continuous Trainer (Foreground)
+echo "🏋️  Starting Continuous Trainer (Process 2)..."
 echo "   (Press Ctrl+C to stop)"
-python3 process2_training_watcher.py
+python3 process2_trainer.py
 
 # Cleanup on exit
 echo "🛑 Stopping Collector..."
