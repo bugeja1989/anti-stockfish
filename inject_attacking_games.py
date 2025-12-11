@@ -14,7 +14,10 @@ DATA_SOURCES = {
     "Tal": "https://www.pgnmentor.com/players/Tal.zip",
     "Kasparov": "https://www.pgnmentor.com/players/Kasparov.zip",
     "Nakamura": "https://www.pgnmentor.com/players/Nakamura.zip",
-    "Carlsen": "https://www.pgnmentor.com/players/Carlsen.zip"
+    "Carlsen": "https://www.pgnmentor.com/players/Carlsen.zip",
+    "Fischer": "https://www.pgnmentor.com/players/Fischer.zip",
+    "Morphy": "https://www.pgnmentor.com/players/Morphy.zip",
+    "JuditPolgar": "https://www.pgnmentor.com/players/PolgarJ.zip"
 }
 
 DATA_DIR = Path("neural_network/data")
