@@ -76,12 +76,67 @@ while true; do
     echo "9. Stop GUI"
     echo "--------------------------------------------------"
     echo "0. Stop ALL & Exit"
+    echo "--------------------------------------------------"
+    echo "H. Health Check & Fix (Run this if issues!)"
     echo "L. View Logs"
     echo "Q. Quit Menu (Keep services running)"
     echo "=================================================="
     read -p "Select an option: " choice
 
     case $choice in
+        H|h)
+            echo "🏥 Running System Health Check..."
+            
+            # 1. Check Stockfish
+            if ! command -v stockfish &> /dev/null; then
+                echo "❌ Stockfish missing."
+                read -p "Install via Homebrew? (y/n) " ans
+                if [[ $ans == "y" ]]; then brew install stockfish; fi
+            else
+                echo "✅ Stockfish found."
+            fi
+            
+            # 2. Check Python Deps
+            echo "📦 Checking Python dependencies..."
+            pip3 install -r requirements.txt > /dev/null 2>&1
+            if [ $? -eq 0 ]; then echo "✅ Dependencies OK."; else echo "❌ Dependency install failed."; fi
+            
+            # 3. Check Opening Book
+            if [ ! -f "neural_network/data/extracted_positions.jsonl" ]; then
+                echo "❌ Opening Book missing."
+                read -p "Inject Opening Book (12k positions)? (y/n) " ans
+                if [[ $ans == "y" ]]; then python3 inject_opening_book.py; fi
+            else
+                lines=$(wc -l < "neural_network/data/extracted_positions.jsonl")
+                echo "✅ Opening Book present ($lines positions)."
+                if [ "$lines" -lt 10000 ]; then
+                    echo "⚠️  Warning: Dataset seems small (<10k). You might be missing the full book."
+                    read -p "Re-inject full Opening Book? (y/n) " ans
+                    if [[ $ans == "y" ]]; then python3 inject_opening_book.py; fi
+                fi
+            fi
+            
+            # 4. Check Tal Games
+            # We check if inject_attacking_games.py has been run.
+            # A simple heuristic is checking if the dataset grew significantly or if we can grep "Tal" from logs?
+            # Better: Just ask user if they want to inject Tal games.
+            echo "❓ Have you injected the Tal/Kasparov games?"
+            read -p "Inject them now? (y/n) " ans
+            if [[ $ans == "y" ]]; then python3 inject_attacking_games.py; fi
+            
+            # 5. Check Models
+            echo "🧠 Checking for trained models..."
+            model_count=$(ls neural_network/models/*.pth 2>/dev/null | wc -l)
+            if [ "$model_count" -eq 0 ]; then
+                echo "⚠️  No trained models found. The engine will play randomly until training starts."
+                echo "   (Make sure to Start Trainer from the menu!)"
+            else
+                echo "✅ Found $model_count trained model(s)."
+            fi
+            
+            echo "✅ Health Check Complete. Press Enter."
+            read
+            ;;
         4) start_service "collector" "python3 process1_chesscom_collector.py" "process1.log" ;;
         5) stop_service "collector" ;;
         6) start_service "trainer" "python3 process2_training_watcher.py --mode training" "process2_training.log" ;;
