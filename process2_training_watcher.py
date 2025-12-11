@@ -758,6 +758,8 @@ def index():
 
 @app.route('/api/stats')
 def get_stats():
+    # Reload state from disk to get latest updates from the Training process
+    trainer.load_state()
     return jsonify({
         'models_trained': trainer.state['models_trained'],
         'positions_extracted': trainer.state['total_positions_extracted'],
