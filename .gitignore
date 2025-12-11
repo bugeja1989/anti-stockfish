@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Models and Data
+*.pth
+*.pt
+neural_network/models/
+neural_network/data/
+process2_state.json
+*.log
+
+# Mac
+.DS_Store
+
+# Virtual Env
+venv/
+env/
