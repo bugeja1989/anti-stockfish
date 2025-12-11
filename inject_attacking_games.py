@@ -4,6 +4,10 @@ import io
 import chess.pgn
 import json
 from pathlib import Path
+import urllib3
+
+# Suppress InsecureRequestWarning since we are disabling SSL verify
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # URLs for Attacking Legends
 DATA_SOURCES = {
@@ -17,7 +21,12 @@ OUTPUT_FILE = DATA_DIR / "extracted_positions.jsonl"
 def download_and_extract(name, url):
     print(f"⬇️ Downloading games of {name}...")
     try:
-        response = requests.get(url)
+        # Add headers to mimic a browser and avoid blocking
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        # Disable SSL verification to bypass LibreSSL issues on some Macs
+        response = requests.get(url, headers=headers, verify=False)
         response.raise_for_status()
         z = zipfile.ZipFile(io.BytesIO(response.content))
         
